@@ -174,8 +174,6 @@ Record T := mkT { t_a : A ; t_b : B t_a ; t_c : C _ t_b }.
 
 Run TemplateProgram (gen_discriminators false "recursivity_kind").
 
-Definition assertTM (b:bool) : TemplateMonad unit :=
-  if b then tmFail "assertion failed" else ret tt.
 
 (* Definition decomposeRecord (mindbody : mutual_inductive_body) *)
 (*   : TemplateMonad unit := *)

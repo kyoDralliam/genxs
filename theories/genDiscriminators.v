@@ -2,25 +2,8 @@ From Coq Require Import Strings.String.
 From MetaCoq.Template Require Import All.
 From Genxs Require Import metacoq_utils.
 
-(** Helpers *)
 
 Import MonadNotation.
-
-Definition monad_iteri {T} `{Monad T} {A} (f: nat -> A -> T unit) l :=
-  monad_map_i f l ;; ret tt.
-
-Fixpoint build_const (argtys: list term) body :=
-  List.fold_right (fun ty t => tLambda nAnon ty t) body argtys.
-
-Definition mkApps_ctx (t:term) (shift:nat) (ctx:context) :=
-  let args :=
-      utils.fold_left_i (fun args i decl =>
-                           match decl_body decl with
-                           | None => ((tRel (shift+i)) :: args)%list
-                           | Some _ => args
-                           end) ctx nil in
-  mkApps t args.
-
 
 (** Generation of discrimators *)
 
