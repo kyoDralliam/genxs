@@ -20,6 +20,48 @@ Definition mkApps_ctx (t:term) (shift:nat) (ctx:context) :=
     utils.fold_left_i fold_fun ctx nil in
   mkApps t args.
 
+Definition is_prim_record (decl:mutual_inductive_body) : option (option ident)
+  :=
+    match ind_bodies decl with
+    | (oib :: nil)%list =>
+      match ind_ctors oib with
+      | (((id,_), _) :: nil)%list => Some (Some id) (* Some data is missing wrt to primitivity *)
+      | _ => None
+      end
+    | _ => None
+    end.
+
+Definition mind_body_to_entry (decl : mutual_inductive_body)
+  : mutual_inductive_entry.
+Proof.
+  refine {| mind_entry_record := is_prim_record decl;
+            mind_entry_finite := ind_finite decl;
+            mind_entry_params := _;
+            mind_entry_inds := _;
+            mind_entry_universes := decl.(ind_universes);
+            mind_entry_private := None |}.
+  - refine (match List.hd_error decl.(ind_bodies) with
+            | Some i0 => List.rev _
+            | None => nil (* assert false: at least one inductive in a mutual block *)
+            end).
+    have [[names types] _] := decompose_prod i0.(ind_type).
+    apply (List.firstn decl.(ind_npars)) in names.
+    apply (List.firstn decl.(ind_npars)) in types.
+    apply: List.combine; [
+      exact (List.map get_ident names)
+    | exact (List.map LocalAssum types)].
+  - refine (List.map _ decl.(ind_bodies)).
+    intros [].
+    refine {| mind_entry_typename := ind_name;
+              mind_entry_arity := remove_arity decl.(ind_npars) ind_type;
+              mind_entry_template := false;
+              mind_entry_consnames := _;
+              mind_entry_lc := _;
+            |}.
+    exact (List.map (fun x => fst (fst x)) ind_ctors).
+    exact (List.map (fun x => remove_arity decl.(ind_npars)
+                                                (snd (fst x))) ind_ctors).
+Defined.
 
 
 Section TemplateMonad.

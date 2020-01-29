@@ -144,5 +144,5 @@ Goal forall (r:R2 nat) f, f r.
 
 Run TemplateProgram (t <- tmQuoteInductive "R2";; tmPrint t).
 
-Quote Definition etaR2 := (fun A (r2:R2 A) => {| a := a A r2 |}).
-Print etaR2.
+(* Quote Definition etaR2 := (fun A (r2:R2 A) => {| a := a A r2 |}). *)
+(* Print etaR2. *)
