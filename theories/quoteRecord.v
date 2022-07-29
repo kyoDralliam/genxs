@@ -1,122 +1,12 @@
 From Coq Require Import List Strings.String ssreflect.
 From MetaCoq.Template Require Import All.
-From Genxs Require Import metacoq_utils.
+From Genxs Require Import metacoq_utils genDiscriminators.
 
 Set Primitive Projections.
 
 Import MonadNotation.
 Import ListNotations.
 
-Record T := mkT { t : unit }.
-Run TemplateProgram (t <- tmQuoteInductive "T";;
-                     tmDefinitionRed "mibT" None t;;
-                     t' <- tmEval cbv (mind_body_to_entry t) ;;
-                     tmDefinitionRed "mieT" None t'  ;;
-                       tmPrint t').
-Reset T.
-Definition mieT :=
-{|
-mind_entry_record := Some (Some "mkT");
-mind_entry_finite := BiFinite;
-mind_entry_params := [];
-mind_entry_inds := [{|
-                    mind_entry_typename := "T";
-                    mind_entry_arity := tSort (NEL.sing (Level.lSet, false));
-                    mind_entry_template := false;
-                    mind_entry_consnames := ["mkT"];
-                    mind_entry_lc := [tProd (nNamed "t")
-                                        (tInd
-                                           {|
-                                           inductive_mind := "Coq.Init.Datatypes.unit";
-                                           inductive_ind := 0 |} []) 
-                                        (tRel 1)] |}];
-mind_entry_universes := Monomorphic_ctx
-                          ({|
-                           LevelSet.this := [];
-                           LevelSet.is_ok := LevelSet.Raw.empty_ok |},
-                          {|
-                          ConstraintSet.this := [];
-                          ConstraintSet.is_ok := ConstraintSet.Raw.empty_ok |});
-mind_entry_private := None |}
-.
-Run TemplateProgram (tmMkInductive mieT).
-
-Definition isSome {A} (m:option A) : bool := if m is Some _ then true else false.
-Record is_Some A (m:option A) := mkIs_Some { pf : isSome m }.
-
-Run TemplateProgram (t <- tmQuoteInductive "is_Some";;
-                     t' <- tmEval cbv (mind_body_to_entry t) ;;
-                     tmPrint t').
-Reset is_Some.
-
-Definition mie_is_Some :=
-{|
-mind_entry_record := Some (Some "mkIs_Some");
-mind_entry_finite := BiFinite;
-mind_entry_params := [("m",
-                      LocalAssum
-                        (tApp
-                           (tInd
-                              {|
-                              inductive_mind := "Coq.Init.Datatypes.option";
-                              inductive_ind := 0 |} []) [
-                           tRel 0]));
-                     ("A",
-                     LocalAssum
-                       (tSort (NEL.sing (Level.Level "Top.330", false))))];
-mind_entry_inds := [{|
-                    mind_entry_typename := "is_Some";
-                    mind_entry_arity := tSort (NEL.sing (Level.lProp, false));
-                    mind_entry_template := false;
-                    mind_entry_consnames := ["mkIs_Some"];
-                    mind_entry_lc := [tProd (nNamed "pf")
-                                        (tApp
-                                           (tConst
-                                              "Coq.Init.Datatypes.is_true" [])
-                                           [tApp (tConst "Top.isSome" [])
-                                              [tRel 1; tRel 0]])
-                                        (tApp (tRel 3) [tRel 2; tRel 1])] |}];
-mind_entry_universes := Monomorphic_ctx
-                          ({|
-                           LevelSet.this := [Level.Level "Top.330"];
-                           LevelSet.is_ok := LevelSet.Raw.add_ok (s:=[])
-                                               (Level.Level "Top.330")
-                                               LevelSet.Raw.empty_ok |},
-                          {|
-                          ConstraintSet.this := [(
-                                                 Level.Level "Top.330",
-                                                 ConstraintType.Le,
-                                                 Level.Level "Top.327");
-                                                (Level.Level "Top.330",
-                                                ConstraintType.Le,
-                                                Level.Level
-                                                 "Coq.Init.Datatypes.13")];
-                          ConstraintSet.is_ok := ConstraintSet.Raw.add_ok
-                                                 (s:=[
-                                                 (
-                                                 Level.Level "Top.330",
-                                                 ConstraintType.Le,
-                                                 Level.Level "Top.327")])
-                                                 (
-                                                 Level.Level "Top.330",
-                                                 ConstraintType.Le,
-                                                 Level.Level
-                                                 "Coq.Init.Datatypes.13")
-                                                 (ConstraintSet.Raw.add_ok
-                                                 (s:=[])
-                                                 (
-                                                 Level.Level "Top.330",
-                                                 ConstraintType.Le,
-                                                 Level.Level "Top.327")
-                                                 ConstraintSet.Raw.empty_ok) |});
-mind_entry_private := None |}.
-
-Unset Strict Unquote Universe Mode.
-Run TemplateProgram (tmMkInductive mie_is_Some).
-
-
-
-From Genxs Require Import genDiscriminators.
 
 Run TemplateProgram (gen_discriminators false "option").
 (* Is there any way to manage implicit arguments from MetaCoq ? *)
