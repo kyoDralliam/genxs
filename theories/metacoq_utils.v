@@ -4,6 +4,15 @@ From MetaCoq.Template Require Import All.
 
 
 
+Definition fold_right_i [A B] (f : nat -> B -> A -> A) (a0 : A) :=
+  (fix fold_right_i n (l : list B) : A :=
+    match l with
+    | []%list => a0
+    | (hd :: tl)%list => f n hd (fold_right_i (S n) tl)
+    end) 0.
+
+
+
 (** Helper functions relying on MetaCoq *)
 
 (** [build_const [t1;..;tn] body] builds the term λ(_:t1)..(_:tn).body *)

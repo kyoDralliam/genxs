@@ -42,6 +42,13 @@ Section Naming.
   Definition discr_class_Etype_id := discr_class_id ++ "_Etype".
   Definition discr_class_E_id := discr_class_id ++ "_E".
 
+  Definition proj_id (argname : aname) (arg_dbi : nat) :=
+    "proj" ++ ctor_id ++ "_" ++
+    match argname.(binder_name) with
+    | nAnon => string_of_nat arg_dbi
+    | nNamed id => id
+    end.
+
 End Naming.
 
 
@@ -69,6 +76,40 @@ Definition qisEqrefl := <% fun A x y (e : @eq A x y) =>
 
 Definition relNamed (s : string) : aname :=
   {| binder_name := nNamed s ; binder_relevance := Relevant |}.
+Definition irrelNamed (s : string) : aname :=
+  {| binder_name := nNamed s ; binder_relevance := Irrelevant |}.
+Definition annonIrrel : aname := {| binder_name := nAnon ; binder_relevance := Irrelevant |}.
+
+From Coq.Logic Require Import StrictProp.
+
+Definition is_true_s (b : bool) : SProp :=
+  if b then sUnit else sEmpty.
+
+Definition toSProp {X} (p : X -> bool) (x : X) : SProp :=
+  is_true_s (p x).
+
+Definition bexfalso {A} (e : false = true) : A :=
+  let B (b : bool) := if b return Type then unit else A in
+  match e in _ = b return B b -> A with
+  | eq_refl => fun x => x
+  end tt.
+
+Definition sexfalso {A} (e : sEmpty) : A := sEmpty_rect (fun _ => A) e.
+
+(* Inductive foo := Foo : nat -> bool -> foo. *)
+
+(* MetaCoq Run ( *)
+(*     ind <- get_inductive "foo"%bs ;; *)
+(*     mindbody <- tmQuoteInductive ind.(inductive_mind) ;; *)
+(*     tmPrint mindbody). *)
+(* Check <% @pair %>. *)
+
+
+(* MetaCoq Run (tyEvar <- @tmQuote Type _ ;; *)
+(*              tmMkDefinition "testA"%bs (tApp <% S %> [tApp <% @id %> [tyEvar; <% 0 %> ]%list ]%list)). *)
+
+(* MetaCoq Run (t <- @tmQuote nat _ ;; tmPrint t). *)
+
 
 Section Builders.
   Context (ind0 : inductive)
@@ -110,139 +151,6 @@ Section Builders.
     let body := tCase case_info0 boolPred (tRel 0) brnchs in
     it_mkLambda_or_LetIn ctx (tLambda principal (ind 0) body).
 
-  (*
-  Let pr_name := nNamed "principal".
-
-  (** Building discriminator classes *)
-  Definition build_discr_class (dicriminator_kn:ident) :=
-    let discriminator := tConst dicriminator_kn nil in
-    let proj_ty (shift:nat) :=
-        mkApp (tConst "Coq.Init.Datatypes.is_true" nil)
-              (mkApp (mkApps_ctx discriminator (1+shift) ctx) (tRel shift))
-    in
-    let proj := (discr_class_proj_id ctor_id, proj_ty 1) in
-
-    let ctor :=
-        let class_ty :=
-            mkApp (mkApps_ctx (tRel (npars + 2)) 2 ctx) (tRel 1) in
-        let ctor_ty :=
-            it_mkProd_or_LetIn ctx (tProd pr_name (ind 0) (tProd (* nAnon *) (nNamed (discr_class_proj_id ctor_id)) (proj_ty 0) class_ty))
-        in
-        (discr_class_ctor_id ctor_id, ctor_ty, 1 (* arity *))
-    in
-
-    let class_body :=
-        Build_one_inductive_body (discr_class_id ctor_id)
-                                (it_mkProd_or_LetIn ctx (tProd pr_name (ind 0) prop))
-                                [:: InProp ; InSet ; InType]
-                                [:: ctor]
-                                [:: proj]
-    in
-    let ind_uvs := Monomorphic_ctx (LevelSetProp.of_list nil, ConstraintSet.empty) in
-    Build_mutual_inductive_body
-      BiFinite
-      (1 + npars)
-      (mkdecl pr_name None (ind 0) :: ctx)
-      [:: class_body]
-      ind_uvs.
-
-
-  Definition rebuild_ctor ctor_idx shift_ctx nargs shift_args :=
-    let ctor := tConstruct ind0 ctor_idx [::] (* FIXME *) in
-    let ctor_ctx := mkApps_ctx ctor shift_ctx ctx in
-    mkApps ctor_ctx (rev [seq tRel i | i <- iota shift_args nargs]).
-
-
-  Quote Definition qeqrefl_true := (eq_refl true).
-
-  Let pf_inst_name := nNamed "pf_inst".
-
-  Context (discrclass_kn:ident).
-  Let discrclass_ind0 := mkInd discrclass_kn 0.
-  Let discrclass_ty shift principal :=
-    mkApp (mkApps_ctx (tInd discrclass_ind0 [::] (*FIXME universes *)) shift ctx) principal.
-
-  Let discrclass_ctor shift ind_ctor :=
-    let ctor := tConstruct discrclass_ind0 0 [::] (* FIXME*) in
-    mkApps ctor ([seq tRel i | i <- iota shift npars] ++ [:: ind_ctor ; qeqrefl_true]).
-
-  (** Generation of the type of elimination for the discr class *)
-  Definition build_discr_class_Etype :=
-    let body :=
-      let build_branch ctor_k '(((_ , ty),arity): (ident × term) × nat) :=
-        let '(argtys, nargtys) :=
-          let '(_, tys, _) := decompose_prod ty in
-          let argtys := List.skipn npars tys in
-          (fun shift =>mapi (fun i ty => lift shift i ty) argtys, List.length argtys)
-        in
-        let re_ctor shift := rebuild_ctor ctor_k (shift+2+nargtys) nargtys shift in
-        let class_ty shift := discrclass_ty (shift+2+nargtys) (re_ctor shift) in
-        let body :=
-          if eq_nat ctor_k ctor_index then
-            let re_class_ctor := discrclass_ctor (3+nargtys) (re_ctor 1) in
-            mkApps qeq (class_ty 1 :: tRel 0 :: re_class_ctor :: nil)
-          else qFalse
-        in
-        let brnch := build_const (argtys 2) (tLambda pf_inst_name (class_ty 0) body) in
-        (nargtys, brnch)
-      in
-      let branches := utils.mapi build_branch (ind_ctors oindbody) in
-      let motive := tLambda pr_name (ind 2) (tProd pf_inst_name (discrclass_ty 3 (tRel 0)) prop) in
-      tCase (ind0, npars) motive (tRel 1) branches
-    in
-    let comm_cut := tProd pf_inst_name (discrclass_ty 1 (tRel 0)) (mkApp body (tRel 0)) in
-    it_mkLambda_or_LetIn ctx (tLambda pr_name (ind 0) comm_cut).
-
-  Quote Definition qnotF := notF.
-
-  (* Record bidule (A:Type) (m : option A) := { bb : if m then nat else bool }. *)
-
-  (* Quote Definition rid := (fun A m (H:bidule A m) => bb _ _ H). *)
-
-
-  Quote Definition qeq_true_true := (true = true).
-  Quote Definition quip_true := (@Eqdep_dec.UIP_refl_bool true).
-  Quote Definition qf_equal := (@f_equal).
-
-  Definition build_discr_class_E (discr_Ety_kn:ident) :=
-    let build_branch ctor_k '(((_ , ty),arity): ctor_t) :=
-      let '(argtys, nargtys) :=
-        let '(_, tys, _) := decompose_prod ty in
-        let argtys := List.skipn npars tys in
-        (fun shift =>mapi (fun i ty => lift shift i ty) argtys, List.length argtys)
-      in
-      let re_ctor shift := rebuild_ctor ctor_k (shift+1+nargtys) nargtys shift in (* sy *)
-      let class_ty shift := discrclass_ty (shift+1+nargtys) (re_ctor shift) in
-      let discrclass_pf := tProj (discrclass_ind0, 1+npars, 0) (tRel 0) in (* is_pf *)
-      let same_brnch :=
-        let re_class_ctor := discrclass_ctor (2+nargtys) (re_ctor 1) in
-        mkApps qf_equal [:: qeq_true_true; class_ty 1; re_class_ctor ; discrclass_pf; qeqrefl_true; mkApp quip_true discrclass_pf]
-      in
-      let diff_brnch := mkApp qnotF discrclass_pf in
-      let body := if eq_nat ctor_k ctor_index then same_brnch else diff_brnch in
-      let brnch := build_const (argtys 1) (tLambda pf_inst_name (class_ty 0) body) in
-      (nargtys, brnch)
-    in
-    let brnchs := utils.mapi build_branch (ind_ctors oindbody) in
-    let discrEty := tConst discr_Ety_kn [::] (* FIXME universes *) in
-    let body := tCase (ind0, npars) (tRel 0) (mkApps_ctx discrEty 2 ctx) brnchs in
-    it_mkLambda_or_LetIn ctx (tLambda pr_name (ind 0) body).
-
-  (* Definition is_someE0 := (fun A (m:option A) => *)
-  (*   match m as m0 return @is_Some_Etype A m0 with *)
-  (*   | Some y => fun H0 : @is_Some A (Some y) => *)
-  (*                let sy := Some y in *)
-  (*                let ispf := @isSome_pf A sy H0 in *)
-  (*                let tr := true in *)
-  (*                @f_equal (@eq bool tr tr) *)
-  (*                         (@is_Some A sy) *)
-  (*                         (@mkIs_Some A sy) *)
-  (*                         ispf *)
-  (*                         (@eq_refl bool tr) *)
-  (*                         (@Eqdep_dec.UIP_refl_bool tr ispf) *)
-  (*   | None => fun H0 : @is_Some A None => @notF (@isSome_pf A None H0) *)
-  (*   end). *)
- *)
 
   Definition arguments_string id :=
     let args :=
@@ -252,6 +160,120 @@ Section Builders.
 
   Definition discriminator_notation id :=
     ("Notation ""'[' '" ++ id++ "' ']'"" := (toSProp " ++ discr_id id ++ ") (format ""[ " ++ id ++ " ]"").")%bs.
+
+
+  (* For constructor c_k :
+    param_ctx ,,, indices_ctx ,, principal |- bodies
+
+    bodies_i : match tRel 0 as principal' in ind0 indices_ctx'
+                          return Rclause_i with
+             | c_k (args) => ok_branch_i
+             | _ => exfalso_branch
+             end
+
+   param_ctx ,,, args_>i |- arg_i_type
+
+   param_ctx ,,, indices_ctx ,, principal ,, principal' ,,, indices_ctx' |-
+   is_true_s (is_c_k param_ctx indices_ctx' principal') ->
+   arg_i_type [bodies_>i] (*weakening !*)
+
+   ok_branch_i := fun _ : sUnit => tRel i
+   exfalso_branch := sexfalso (arg_i_type [bodies_>i] (* weakening *))
+
+   *)
+
+
+  Definition build_projectors (discriminator : term) (mp : modpath)
+    : list (ident * term) :=
+    let principal := relNamed "principal"%bs in
+    let ctx1 := ctx ,, (vass principal (ind 0)) in
+
+    let discr_arg := irrelNamed "discr"%bs in
+    let discr_ty shift :=
+      (* let discrBool := tApp discriminator [tRel 0]%list in *)
+      let discrBool := tApp discriminator (subst_from_ctx shift ctx1) in
+      tApp <% is_true_s %> [ discrBool ]%list
+    in
+    (* let ctx2 := ctx1 ,, (vass discr_arg (discr_ty 0)) in *)
+
+
+    let body_for_arg arg_dbi (arg : context_decl) (s : list (ident * term))
+      : list (ident * term) :=
+
+      let case_info0 := mk_case_info ind0 npars arg.(decl_name).(binder_relevance) in
+      let ret_ty_in params_shift indices_principal_sub :=
+        let apply_to_args '(id, _) :=
+          tApp (tConst (mp, id) uvs)
+               (subst_from_ctx params_shift param_ctx ++
+                  indices_principal_sub ++
+                  [ tRel 0 (* discriminator proof *)])
+        in
+        subst0 (List.map apply_to_args s)
+          (lift params_shift #|s| arg.(decl_type))
+      in
+
+      let pred : predicate term :=
+        let params := subst_from_ctx (S #|indices_ctx|) param_ctx in
+        let pctx := (principal :: List.map decl_name indices_ctx)%list in
+
+        let shift_params_return := #|pctx| + S (#|indices_ctx|) in
+
+        let discr_ty :=
+          let params_in_return := subst_from_ctx shift_params_return param_ctx in
+          let indices_and_principal := List.rev (mapi (fun i _ => tRel i) pctx) in
+          let discr_args := (params_in_return ++ indices_and_principal)%list in
+          tApp <% is_true_s %> [ tApp discriminator discr_args ]%list
+        in
+
+        let ret_ty := ret_ty_in (S (shift_params_return))
+                        (List.rev (mapi (fun i _ => tRel (S i)) pctx)) in
+
+        {| puinst := uvs (* FIXME*) ;
+          pparams := params ;
+          pcontext := pctx ;
+          preturn := tProd discr_arg discr_ty ret_ty
+        |}
+      in
+      let build_branch ctor_k (cb : constructor_body) : branch term :=
+        let correct_branch :=
+          tLambda annonIrrel <% sUnit %> (tRel (S arg_dbi))
+        in
+        let exfalso_branch :=
+          let params_shift := S (#|cb.(cstr_args)| + S (#|indices_ctx|)) in
+          let cstr_term :=
+            tApp (tConstruct ind0 ctor_k uvs)
+              (subst_from_ctx params_shift param_ctx ++
+                 subst_from_ctx 1 cb.(cstr_args))%list
+          in
+          let ret_ty :=
+            ret_ty_in params_shift (List.map (lift0 1) cb.(cstr_indices) ++ [cstr_term])%list
+          in
+          tLambda discr_arg <% sEmpty %> (tApp <% @sexfalso %> [ret_ty ; tRel 0]%list)
+        in
+        {| bcontext := List.map decl_name cb.(cstr_args) ;
+           bbody := if Nat.eqb ctor_k ctor_index
+                    then correct_branch 
+                    else exfalso_branch |} in
+      let brnchs := mapi build_branch (ind_ctors oindbody) in
+      let body := tCase case_info0 pred (tRel 0) brnchs in
+      ((proj_id ctor.(cstr_name) arg.(decl_name) arg_dbi, body) :: s)%list
+    in
+
+    (* Retrieve the context of arguments from the closed type
+       of current constructor
+     *)
+    let arg_ctx :=
+      let ctor_ty := type_of_constructor mindbody ctor (ind0, 0 (*unused*)) uvs in
+      let ctx_with_params := (decompose_prod_assum nil%list ctor_ty).1 in
+      let last_arg_dbi := #|ctor.(cstr_args)| in
+      (* lift_context (S last_arg_dbi) (2 + #|indices_ctx|) *)
+        (List.firstn last_arg_dbi ctx_with_params)
+    in
+
+    let bodys := fold_right_i body_for_arg nil%list arg_ctx in
+
+    List.map (fun '(id, body) => (id, it_mkLambda_or_LetIn ctx1 body)) bodys.
+
 End Builders.
 
 
@@ -266,7 +288,6 @@ Definition gen_from_mind  generate (debug:bool) (mindname : qualid)
   in
   monad_iteri oid_gen (ind_bodies mindbody).
 
-
 Definition gen_discriminators :=
   let generate (debug:bool) ind mindbody oindbody ctor_idx ctor :=
     let discr_id := discr_id ctor.(cstr_name) in
@@ -280,11 +301,29 @@ Definition gen_discriminators :=
   in
   gen_from_mind generate.
 
+Definition mkQuoteDefinition (id : ident) (tm : term) :
+  TemplateMonad unit :=
+  tmDefinitionRed id (Some all) (A:=term) tm ;; ret tt.
 
-From Coq.Logic Require Import StrictProp.
+Definition gen_projectors :=
+  let generate (debug:bool) ind mindbody oindbody ctor_idx ctor :=
+    let discr_id := discr_id ctor.(cstr_name) in
+    let discr_body := build_discriminators ind mindbody oindbody ctor_idx in
+    t <- tmEval all discr_body ;;
+    if debug then tmPrint t
+    else
+      tmMkDefinition discr_id t ;;
+      tmMsg (arguments_string mindbody oindbody discr_id) ;;
+      tmMsg (discriminator_notation ctor.(cstr_name)) ;;
+      discr_kn <- get_const discr_id ;;
+      tmPrint discr_kn ;;
+      mp <- tmCurrentModPath tt ;;
+      let projs := build_projectors ind mindbody oindbody ctor_idx ctor (tConst discr_kn nil%list) mp in
+      (* monad_iter (fun '(id, body) => mkQuoteDefinition ("q" ++ id)%bs body) (List.rev projs) *)
+      monad_iter (uncurry tmMkDefinition) (List.rev projs)
+  in
+  gen_from_mind generate.
 
-Polymorphic Definition toSProp {X} (p : X -> bool) (x : X) : SProp :=
-  if p x then sUnit else sEmpty.
 
 Module DiscriminatorExamples.
 
@@ -292,7 +331,9 @@ Notation ok := eq_refl.
 Notation oks := stt.
 
 Inductive myBool := myTrue | myFalse.
-MetaCoq Run (gen_discriminators false "myBool"%bs).
+
+(* MetaCoq Run (gen_discriminators false "myBool"%bs). *)
+MetaCoq Run (gen_projectors false "myBool"%bs).
 Arguments ismyTrue _ : simpl nomatch.
 Notation "'[' 'myTrue' ']'" := (toSProp ismyTrue) (format "[ myTrue ]").
 Arguments ismyFalse _ : simpl nomatch.
@@ -305,7 +346,18 @@ Inductive myList (A : Type) := myNil | myCons (hd : A) (tl : myList A) : myList 
 Arguments myNil {_}.
 Arguments myCons {_} _ _.
 
-MetaCoq Run (gen_discriminators false "myList"%bs).
+(* MetaCoq Run (gen_discriminators false "myList"%bs). *)
+MetaCoq Run (gen_projectors false "myList"%bs).
+
+(* Definition qhd := Eval cbv in projmyCons_hd. *)
+(* MetaCoq Run (tmMkDefinition "phd"%bs qhd). *)
+
+(* Definition qtl := Eval cbv in projmyCons_tl. *)
+(* MetaCoq Run (tmMkDefinition "ptl"%bs qtl). *)
+
+(* MetaCoq Run (list <- get_inductive "myList"%bs ;; *)
+(*              ind <- tmQuoteInductive list.(inductive_mind) ;; *)
+(*              tmPrint ind). *)
 
 Arguments ismyNil {_} _ : simpl nomatch.
 Notation "'[' 'myNil' ']'" := (toSProp ismyNil) (format "[ myNil ]").
@@ -317,83 +369,101 @@ Check ok : ismyNil (@myNil nat).
 Check ok : ismyCons (myCons 5 myNil).
 Fail Check ok : ismyNil (myCons 5 myNil).
 
-Definition bexfalso {A} (e : false = true) : A :=
-  let B (b : bool) := if b return Type then unit else A in
-  match e in _ = b return B b -> A with
-  | eq_refl => fun x => x
-  end tt.
 
-Definition sexfalso {A} (e : sEmpty) : A := sEmpty_rect (fun _ => A) e.
+(* Definition myCons_hd {A : Type} (l : myList A) : ismyCons l -> A := *)
+(*   match l with *)
+(*   | myNil => bexfalso *)
+(*   | myCons hd _ => fun _ => hd *)
+(*   end. *)
 
-Definition myCons_hd {A : Type} (l : myList A) : ismyCons l -> A :=
-  match l with
-  | myNil => bexfalso
-  | myCons hd _ => fun _ => hd
-  end.
+(* Definition myCons_hd_s {A : Type} (l : myList A) : [myCons] l -> A := *)
+(*   match l with *)
+(*   | myNil => sexfalso *)
+(*   | myCons hd _ => fun _ => hd *)
+(*   end. *)
 
-Definition myCons_hd_s {A : Type} (l : myList A) : [myCons] l -> A :=
-  match l with
-  | myNil => sexfalso
-  | myCons hd _ => fun _ => hd
-  end.
+(* Notation "'[' 'myCons' '-' 'hd' l ']'" := *)
+(*   (myCons_hd_s l ltac:(assumption)) (only parsing). *)
+(* Notation "'[' 'myCons' '-' 'hd' l ']'" := *)
+(*   (myCons_hd_s l _) (only printing). *)
 
-Notation "'[' 'myCons' '-' 'hd' l ']'" :=
-  (myCons_hd_s l ltac:(assumption)) (only parsing).
-Notation "'[' 'myCons' '-' 'hd' l ']'" :=
-  (myCons_hd_s l _) (only printing).
-
-Check fun (l : myList nat) (h : [myCons] l) => Nat.eqb [myCons-hd l] 5.
+(* Check fun (l : myList nat) (h : [myCons] l) => Nat.eqb [myCons-hd l] 5. *)
 
 
 Inductive mySig (A : Type) (B : A -> Type) :=
   | pair (dfst : A) (dsnd : B dfst) : mySig A B.
 Arguments pair {_ _} _ _.
 
-MetaCoq Run (gen_discriminators false "mySig"%bs).
+(* MetaCoq Run (gen_discriminators false "mySig"%bs). *)
+MetaCoq Run (gen_projectors false "mySig"%bs).
 Arguments ispair {_} {_} _ : simpl nomatch.
 
+(* Definition qdfst := Eval cbv in projpair_dfst. *)
+(* MetaCoq Run (tmMkDefinition "pdfst"%bs qdfst). *)
+
+(* Definition qdsnd := Eval cbn in projpair_dsnd. *)
+
+(* MetaCoq Run (tmMkDefinition "pdsnd'"%bs qdsnd'). *)
+(* MetaCoq Run (mp <- tmCurrentModPath tt ;; tmPrint mp). *)
+(* Check <% pfst %>. *)
 Check ok : ispair (pair 5 (6 : (fun _ => nat) _)).
 
 Notation "'[' 'pair' ']' " := ispair.
 
-Definition pair_dfst (A : Type) (B : A -> Type) (x : mySig A B)
-  : [pair] x -> A :=
-  match x with
-  | pair dfst dsnd => fun _ => dfst
-  end.
+(* Definition pair_dfst (A : Type) (B : A -> Type) (x : mySig A B) *)
+(*   : [pair] x -> A := *)
+(*   match x with *)
+(*   | pair dfst dsnd => fun _ => dfst *)
+(*   end. *)
 
-Arguments pair_dfst {_} {_} _ _.
-Notation "'[' 'pair' '-' 'dfst' x ']'" :=
-  (pair_dfst x ltac:(assumption)) (only parsing).
-Notation "'[' 'pair' '-' 'dfst' x ']'" :=
-  (pair_dfst x _) (only printing).
+(* Arguments pair_dfst {_} {_} _ _. *)
+(* Notation "'[' 'pair' '-' 'dfst' x ']'" := *)
+(*   (pair_dfst x ltac:(assumption)) (only parsing). *)
+(* Notation "'[' 'pair' '-' 'dfst' x ']'" := *)
+(*   (pair_dfst x _) (only printing). *)
 
-Definition pair_dsnd (A : Type) (B : A -> Type) (x : mySig A B)
-  : forall (h : [pair] x), B [pair-dfst x] :=
-  match x with
-  | pair dfst dsnd => fun _ => dsnd
-  end.
+(* Definition pair_dsnd (A : Type) (B : A -> Type) (x : mySig A B) *)
+(*   : forall (h : [pair] x), B [pair-dfst x] := *)
+(*   match x with *)
+(*   | pair dfst dsnd => fun _ => dsnd *)
+(*   end. *)
 
-Arguments pair_dsnd {_} {_} _ _.
-Notation "'[' 'pair' '-' 'dsnd' x ']'" :=
-  (pair_dsnd x ltac:(assumption + easy)) (only parsing).
-Notation "'[' 'pair' '-' 'dsnd' x ']'" :=
-  (pair_dsnd x _) (only printing).
+(* Arguments pair_dsnd {_} {_} _ _. *)
+(* Notation "'[' 'pair' '-' 'dsnd' x ']'" := *)
+(*   (pair_dsnd x ltac:(assumption + easy)) (only parsing). *)
+(* Notation "'[' 'pair' '-' 'dsnd' x ']'" := *)
+(*   (pair_dsnd x _) (only printing). *)
 
-Eval cbn in let p : mySig nat (fun _ => nat) := pair 5 6 in
-            [pair-dsnd p].
+(* Eval cbn in let p : mySig nat (fun _ => nat) := pair 5 6 in *)
+(*             [pair-dsnd p]. *)
 
 
 Inductive myBoolFam : bool -> Type :=
   | myIsTrue : myBoolFam true.
-MetaCoq Run (gen_discriminators false "myBoolFam"%bs).
+(* MetaCoq Run (gen_discriminators false "myBoolFam"%bs). *)
+MetaCoq Run (gen_projectors false "myBoolFam"%bs).
 
 Inductive vect (A : Type) : nat -> Type :=
 | vnil : vect A 0
 | vcons (hd : A) {len_tl} (tl : vect A len_tl) : vect A (S len_tl).
 Arguments vnil {_}.
 Arguments vcons {_} _ {_} _.
-MetaCoq Run (gen_discriminators false "vect"%bs).
+(* MetaCoq Run (gen_discriminators false "vect"%bs). *)
+MetaCoq Run (gen_projectors false "vect"%bs).
+
+(* MetaCoq Run (tmMkDefinition "projvcons_hd"%bs qprojvcons_hd). *)
+(* MetaCoq Run (tmMkDefinition "projvcons_len_tl"%bs qprojvcons_len_tl). *)
+
+(* Definition qprojvcons_tl0 := Eval cbv in qprojvcons_tl. *)
+(* MetaCoq Run (tmMkDefinition "projvcons_tl"%bs qprojvcons_tl0). *)
+
+(* Definition pvcons_tl A n (v : vect A n) : *)
+(*   forall (h : is_true_s (isvcons A n v)), vect A (projvcons_len_tl A n v h) := *)
+(*   match v with *)
+(*   | vnil => fun e : sEmpty => sexfalso e *)
+(*   | vcons _ _ tl => fun _ => tl *)
+(*   end. *)
+
 Arguments isvnil {_} {_} _ : simpl nomatch.
 Arguments isvcons {_} {_} _ : simpl nomatch.
 
@@ -408,7 +478,8 @@ Inductive even : nat -> Type :=
 with odd : nat -> Type :=
 | oddS {n} (evenn : even n) : odd (S n).
 
-MetaCoq Run (gen_discriminators false "even"%bs).
+(* MetaCoq Run (gen_discriminators false "even"%bs). *)
+MetaCoq Run (gen_projectors false "even"%bs).
 Arguments isevenZ {_} _ : simpl nomatch.
 Arguments isevenS {_} _ : simpl nomatch.
 Arguments isoddS {_} _ : simpl nomatch.
