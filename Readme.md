@@ -16,10 +16,11 @@ Contents
 - Discriminators and projectors generation for inductive types
   e.g. 
       `MetaCoq Run (gen_projectors "option"%bs)` generates
-  isNone : option A -> bool,
-  isSome : option A -> bool,
-  projSome_0 : forall (o : option A), isSome o -> A
-
+  ```
+      isNone : option A -> bool,
+      isSome : option A -> bool,
+      projSome_0 : forall (o : option A), isSome o -> A
+  ```
   (in theories/genDiscriminators.v)
   
   
