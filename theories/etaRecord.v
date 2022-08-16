@@ -7,8 +7,10 @@ Set Primitive Projections.
 Class Eta_exp A := { eta_exp : A -> A}.
 Class Eta A `{Eta_exp A} := { eta : forall (a:A), a = eta_exp a }.
 
-Run TemplateProgram (def_kername "Eta_exp" "Eta_exp_kername").
-Run TemplateProgram (def_kername "Eta" "Eta_kername").
+MetaCoq Run (def_kername "Eta_exp"%bs "Eta_exp_kername"%bs).
+MetaCoq Run (def_kername "Eta"%bs "Eta_kername"%bs).
+
+Definition anonRel : aname := {| binder_name := nAnon ; binder_relevance := Relevant |}.
 
 Definition eta_oib (ind:inductive)
            (mib:mutual_inductive_body)
@@ -24,16 +26,20 @@ Definition eta_oib (ind:inductive)
   let ctor := mkApps_ctx (tConstruct ind 0 uvs) 1 ctx in
   let body :=
       let map_fun idx_proj _proj :=
-          tProj (ind, ind_npars mib, idx_proj) (tRel 0)
+        let proj := mkProjection ind (ind_npars mib) idx_proj in
+        tProj proj (tRel 0)
       in
       tApp ctor (mapi map_fun (ind_projs oib))
   in
-  let eta0 := tLambda nAnon indful body in
+  let eta0 := tLambda anonRel indful body in
   let eta_exp0 :=
       tApp (tConstruct (mkInd Eta_exp_kername 0) 0 nil) (indful :: eta0 :: nil)%list
   in
   (it_mkLambda_or_LetIn ctx eta0,
    it_mkLambda_or_LetIn ctx eta_exp0).
+
+Axiom unreachable : forall {A}, A.
+Definition eq_ind := Eval cbn in match <% @eq %> with | tInd x _ => x | _ => unreachable end. 
 
 Definition eta_eq_oib (ind:inductive)
            (mib:mutual_inductive_body)
@@ -51,7 +57,8 @@ Definition eta_eq_oib (ind:inductive)
     let ctor := mkApps_ctx (tConstruct ind 0 uvs) 1 ctx in
     (* let body := *)
       let map_fun idx_proj _proj :=
-          tProj (ind, ind_npars mib, idx_proj) (tRel 0)
+        let proj := mkProjection ind (ind_npars mib) idx_proj in
+        tProj proj (tRel 0)
       in
       tApp ctor (mapi map_fun (ind_projs oib))
     (* in *)
@@ -67,16 +74,13 @@ Definition eta_eq_oib (ind:inductive)
   (*     in *)
   (*     tApp ctor (mapi map_fun (ind_projs oib)) *)
   (* in *)
-  let eq_ind :=
-      {| inductive_mind := "Coq.Init.Logic.eq"; inductive_ind := 0 |}
-  in
   let qrefl :=
-      tApp (tConstruct eq_ind 0 nil) (indful 1 :: (tRel 0 :: nil)%list)
+      tApp <% @eq_refl %> (indful 1 :: (tRel 0 :: nil)%list)
   in
   let qeq :=
-      tApp (tInd eq_ind nil) (indful 1 :: (tRel 0 :: eta :: nil)%list)
+      tApp <% @eq %> (indful 1 :: (tRel 0 :: eta :: nil)%list)
   in
-  let eta_eq := tLambda nAnon (indful 0) (tCast qrefl Cast qeq) in
+  let eta_eq := tLambda anonRel (indful 0) (tCast qrefl Cast qeq) in
   let eta_record :=
       let eta_exp := mkApps_ctx existing_eta_exp 0 ctx in
       tApp (tConstruct (mkInd Eta_kername 0) 0 nil)
@@ -87,62 +91,77 @@ Definition eta_eq_oib (ind:inductive)
 
 
 
-Import MonadNotation.
+Import MCMonadNotation.
 
+
+Set Printing Universes.
 Definition gen_eta_instance (id:ident) : TemplateMonad unit :=
-  id <- tmEval all id ;;
   (* REPORT : if the inductive does not exists, raises an anomaly... *)
-  mib <- tmQuoteInductive id ;;
   ind <- get_inductive id ;;
-  oib <- extract_uniq (ind_bodies mib) "nope" ;;
-  let '(_, eta_exp) := eta_oib ind mib oib in
-  eta_exp_id <- tmEval all ("eta" ++ id) ;;
+  mib <- tmQuoteInductive ind.(inductive_mind) ;;
+  oib <- extract_uniq (ind_bodies mib) "nope"%bs ;;
+
+  let eta_exp := (eta_oib ind mib oib).2 in
+  let eta_exp_id := ("eta" ++ id)%bs in
   tmMkDefinition eta_exp_id eta_exp;;
-  tmExistingInstance eta_exp_id ;;
+  eta_exp_kn <- get_const eta_exp_id ;; 
+  tmExistingInstance (ConstRef eta_exp_kn) ;;
+
   ind_eta_exp <- get_const eta_exp_id ;;
   let '(_, eta) :=
-      let qeta_exp := tConst ind_eta_exp nil in
-      eta_eq_oib ind mib oib qeta_exp
+    let qeta_exp := tConst ind_eta_exp nil in
+    eta_eq_oib ind mib oib qeta_exp
   in
-  eta_id <-  tmEval all ("eta_eq" ++ id) ;;
-  tmMkDefinition eta_id eta ;;
-  tmExistingInstance eta_id.
-
+  let eta_eq_id := ("eta_eq" ++ id)%bs in
+  tmMkDefinition eta_eq_id eta ;;
+  eta_eq_kn <- get_const eta_eq_id ;;
+  tmExistingInstance (ConstRef eta_eq_kn).
 
 
 (** Tests *)
 
-Record R := {x : nat; y : bool ; z : unit -> unit}.
+Module EtaTests.
 
-Run TemplateProgram (gen_eta_instance "R").
+  Record R := {x : nat; y : bool ; z : unit -> unit}.
 
+  MetaCoq Run (gen_eta_instance "R"%bs).
 
-(* Instance Eta_expR : Eta_exp R := *)
-(*   ltac:(let t := eval unfold etaR in {| eta_exp := etaR |} in exact t). *)
+  Goal forall (r:R) f, f r.
+    move=> r; rewrite [r]eta/=.
+  Abort.
 
-(* Quote Definition qEta_expR := Eval unfold Eta_expR in Eta_expR. *)
+  (** Trying with params *)
 
-(* Instance EtaR : Eta R := {| eta := eta_eqR |}. *)
+  Record R2 A := { a : A }.
 
-(* Quote Definition qEta := Eval unfold EtaR in EtaR. *)
+  MetaCoq Run (gen_eta_instance "R2"%bs).
+  
+  Goal forall (r:R2 nat) f, f r.
+    move=> r; rewrite [r]eta/=.
+  Abort.
 
-Goal forall (r:R) f, f r.
-  move=> r; rewrite [r]eta/=. Abort.
+  (** also dependency *)
 
-(* Quote Definition qetaR := (fun (r:R) => {| x := x r; y := y r ; z := z r|}). *)
-(* Quote Definition qetaR_eq := (fun (r:R) => eq_refl : r = etaR r). *)
+  Record R3 (A : Type) (B : A -> Type) := { p : A ; q : B p }.
+  MetaCoq Run (gen_eta_instance "R3"%bs).
 
+  From Coq Require Import Fin.
 
-(** Trying to extend to records with params *)
+  Goal forall (r:R3 nat Fin.t) f, f r.
+    move=> r; rewrite [r]eta/=.
+  Abort.
 
-Record R2 A := { a : A }.
+  Record R4 := { C : Type ; op : C -> C -> C ; law : forall x y z, op x (op y z) = x }.
+  MetaCoq Run (gen_eta_instance "R4"%bs).
+  Goal forall (r:R3 nat Fin.t) f, f r.
+    move=> r; rewrite [r]eta/=.
+  Abort.
 
-Run TemplateProgram (gen_eta_instance "R2").
+  (* Pushing too far ? *)
 
-Goal forall (r:R2 nat) f, f r.
-  move=> r; rewrite [r]eta/=. Abort.
+  CoInductive Stream := { hd : nat ; tl : Stream }.
+  (* Fails as expected (eg. would break SR) *)
+  Fail MetaCoq Run (gen_eta_instance "Stream"%bs).
 
-Run TemplateProgram (t <- tmQuoteInductive "R2";; tmPrint t).
-
-(* Quote Definition etaR2 := (fun A (r2:R2 A) => {| a := a A r2 |}). *)
-(* Print etaR2. *)
+  (* Is there a way to use Pierre-Marie's criterion for dependent elimination of positive CoInductives ? *)
+End EtaTests.

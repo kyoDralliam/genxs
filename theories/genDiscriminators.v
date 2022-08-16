@@ -30,6 +30,13 @@ Section IteriInd.
 End IteriInd.
 
 
+Definition aname_ident (an : aname) (dflt : string) : string :=
+    match an.(binder_name) with
+    | nAnon => dflt
+    | nNamed id => id
+    end.
+
+
 (** Naming conventions *)
 Section Naming.
   Context (ctor_id : ident).
@@ -42,13 +49,8 @@ Section Naming.
   Definition discr_class_Etype_id := discr_class_id ++ "_Etype".
   Definition discr_class_E_id := discr_class_id ++ "_E".
 
-  Definition proj_id (argname : aname) (arg_dbi : nat) :=
-    "proj" ++ ctor_id ++ "_" ++
-    match argname.(binder_name) with
-    | nAnon => string_of_nat arg_dbi
-    | nNamed id => id
-    end.
-
+  Definition proj_id (argname : aname) (arg_i : nat) :=
+    "proj" ++ ctor_id ++ "_" ++ aname_ident argname (string_of_nat arg_i).
 End Naming.
 
 
@@ -78,7 +80,7 @@ Definition relNamed (s : string) : aname :=
   {| binder_name := nNamed s ; binder_relevance := Relevant |}.
 Definition irrelNamed (s : string) : aname :=
   {| binder_name := nNamed s ; binder_relevance := Irrelevant |}.
-Definition annonIrrel : aname := {| binder_name := nAnon ; binder_relevance := Irrelevant |}.
+Definition anonIrrel : aname := {| binder_name := nAnon ; binder_relevance := Irrelevant |}.
 
 From Coq.Logic Require Import StrictProp.
 
@@ -161,6 +163,13 @@ Section Builders.
   Definition discriminator_notation id :=
     ("Notation ""'[' '" ++ id++ "' ']'"" := (toSProp " ++ discr_id id ++ ") (format ""[ " ++ id ++ " ]"").")%bs.
 
+  Definition projector_notation id arg projector_id :=
+    let common :=
+    ("Notation ""'[' '" ++ id++ "' '-' '" ++ arg ++ "' x ']'"" := (" ++ projector_id ++
+       String.concat "" (List.map (fun _ => " _"%bs) ctx))%bs
+    in
+    ((common ++ " x ltac:(assumption + easy)) (only parsing).")%bs,
+      (common ++ " x _) (only printing, format ""[ " ++ id ++ " - " ++ arg ++ "  " ++ "x ]"").")%bs).
 
   (* For constructor c_k :
     param_ctx ,,, indices_ctx ,, principal |- bodies
@@ -190,12 +199,9 @@ Section Builders.
 
     let discr_arg := irrelNamed "discr"%bs in
     let discr_ty shift :=
-      (* let discrBool := tApp discriminator [tRel 0]%list in *)
       let discrBool := tApp discriminator (subst_from_ctx shift ctx1) in
       tApp <% is_true_s %> [ discrBool ]%list
     in
-    (* let ctx2 := ctx1 ,, (vass discr_arg (discr_ty 0)) in *)
-
 
     let body_for_arg arg_dbi (arg : context_decl) (s : list (ident * term))
       : list (ident * term) :=
@@ -208,8 +214,7 @@ Section Builders.
                   indices_principal_sub ++
                   [ tRel 0 (* discriminator proof *)])
         in
-        subst0 (List.map apply_to_args s)
-          (lift params_shift #|s| arg.(decl_type))
+        subst0 (List.map apply_to_args s) (lift params_shift #|s| arg.(decl_type))
       in
 
       let pred : predicate term :=
@@ -225,8 +230,7 @@ Section Builders.
           tApp <% is_true_s %> [ tApp discriminator discr_args ]%list
         in
 
-        let ret_ty := ret_ty_in (S (shift_params_return))
-                        (List.rev (mapi (fun i _ => tRel (S i)) pctx)) in
+        let ret_ty := ret_ty_in (S (shift_params_return)) (List.rev (mapi (fun i _ => tRel (S i)) pctx)) in
 
         {| puinst := uvs (* FIXME*) ;
           pparams := params ;
@@ -234,45 +238,39 @@ Section Builders.
           preturn := tProd discr_arg discr_ty ret_ty
         |}
       in
+
       let build_branch ctor_k (cb : constructor_body) : branch term :=
-        let correct_branch :=
-          tLambda annonIrrel <% sUnit %> (tRel (S arg_dbi))
-        in
+        let correct_branch := tLambda anonIrrel <% sUnit %> (tRel (S arg_dbi)) in
         let exfalso_branch :=
           let params_shift := S (#|cb.(cstr_args)| + S (#|indices_ctx|)) in
-          let cstr_term :=
-            tApp (tConstruct ind0 ctor_k uvs)
-              (subst_from_ctx params_shift param_ctx ++
-                 subst_from_ctx 1 cb.(cstr_args))%list
-          in
-          let ret_ty :=
-            ret_ty_in params_shift (List.map (lift0 1) cb.(cstr_indices) ++ [cstr_term])%list
-          in
+          let cstr_term := tApp (tConstruct ind0 ctor_k uvs) (subst_from_ctx params_shift param_ctx ++ subst_from_ctx 1 cb.(cstr_args))%list in
+          let ret_ty := ret_ty_in params_shift (List.map (lift0 1) cb.(cstr_indices) ++ [cstr_term])%list in
           tLambda discr_arg <% sEmpty %> (tApp <% @sexfalso %> [ret_ty ; tRel 0]%list)
         in
+
         {| bcontext := List.map decl_name cb.(cstr_args) ;
            bbody := if Nat.eqb ctor_k ctor_index
                     then correct_branch 
-                    else exfalso_branch |} in
+                    else exfalso_branch |}
+      in
+
       let brnchs := mapi build_branch (ind_ctors oindbody) in
       let body := tCase case_info0 pred (tRel 0) brnchs in
-      ((proj_id ctor.(cstr_name) arg.(decl_name) arg_dbi, body) :: s)%list
+      ((proj_id ctor.(cstr_name) arg.(decl_name) (ctor.(cstr_arity) - S arg_dbi), body) :: s)%list
     in
 
     (* Retrieve the context of arguments from the closed type
-       of current constructor
-     *)
+       of current constructor *)
     let arg_ctx :=
       let ctor_ty := type_of_constructor mindbody ctor (ind0, 0 (*unused*)) uvs in
       let ctx_with_params := (decompose_prod_assum nil%list ctor_ty).1 in
-      let last_arg_dbi := #|ctor.(cstr_args)| in
-      (* lift_context (S last_arg_dbi) (2 + #|indices_ctx|) *)
-        (List.firstn last_arg_dbi ctx_with_params)
+      let last_arg_dbi := ctor.(cstr_arity) in
+      List.firstn last_arg_dbi ctx_with_params
     in
 
     let bodys := fold_right_i body_for_arg nil%list arg_ctx in
 
-    List.map (fun '(id, body) => (id, it_mkLambda_or_LetIn ctx1 body)) bodys.
+    rev_map (fun '(id, body) => (id, it_mkLambda_or_LetIn ctx1 body)) bodys.
 
 End Builders.
 
@@ -305,29 +303,42 @@ Definition mkQuoteDefinition (id : ident) (tm : term) :
   TemplateMonad unit :=
   tmDefinitionRed id (Some all) (A:=term) tm ;; ret tt.
 
+
+Definition constructor_arg_name (ctor : constructor_body) (i : nat) : option string :=
+  match List.nth_error ctor.(cstr_args) (ctor.(cstr_arity) - S i) with
+  | Some cd => Some (aname_ident cd.(decl_name) (string_of_nat i))
+  | None => None
+  end.
+
 Definition gen_projectors :=
   let generate (debug:bool) ind mindbody oindbody ctor_idx ctor :=
     let discr_id := discr_id ctor.(cstr_name) in
     let discr_body := build_discriminators ind mindbody oindbody ctor_idx in
-    t <- tmEval all discr_body ;;
-    if debug then tmPrint t
-    else
-      tmMkDefinition discr_id t ;;
-      tmMsg (arguments_string mindbody oindbody discr_id) ;;
-      tmMsg (discriminator_notation ctor.(cstr_name)) ;;
-      discr_kn <- get_const discr_id ;;
-      tmPrint discr_kn ;;
-      mp <- tmCurrentModPath tt ;;
-      let projs := build_projectors ind mindbody oindbody ctor_idx ctor (tConst discr_kn nil%list) mp in
+    tmMkDefinition discr_id discr_body ;;
+    tmMsg (arguments_string mindbody oindbody discr_id) ;;
+    tmMsg (discriminator_notation ctor.(cstr_name)) ;;
+
+    mp <- tmCurrentModPath tt ;;
+    let discr_kn := (mp, discr_id) in
+    let projs := build_projectors ind mindbody oindbody ctor_idx ctor (tConst discr_kn nil%list) mp in
       (* monad_iter (fun '(id, body) => mkQuoteDefinition ("q" ++ id)%bs body) (List.rev projs) *)
-      monad_iter (uncurry tmMkDefinition) (List.rev projs)
+    monad_iter (uncurry tmMkDefinition) projs ;;
+    let mk_notation arg_i '(id, _) :=
+      match constructor_arg_name ctor arg_i with
+      | Some name =>
+          let notations := projector_notation mindbody oindbody ctor.(cstr_name) name id in
+          tmMsg notations.1 ;; tmMsg notations.2
+      | None => ret tt
+      end
+    in
+    monad_iteri mk_notation  projs
   in
   gen_from_mind generate.
 
 
 Module DiscriminatorExamples.
 
-Notation ok := eq_refl.
+Notation ok := (@eq_refl bool true).
 Notation oks := stt.
 
 Inductive myBool := myTrue | myFalse.
@@ -364,10 +375,20 @@ Notation "'[' 'myNil' ']'" := (toSProp ismyNil) (format "[ myNil ]").
 Arguments ismyCons {_} _ : simpl nomatch.
 Notation "'[' 'myCons' ']'" := (toSProp ismyCons) (format "[ myCons ]").
 
+Notation "'[' 'myCons' '-' 'hd' x ']'" := (projmyCons_hd _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'myCons' '-' 'hd' x ']'" := (projmyCons_hd _ x _) (only printing, format "[ myCons - hd  x ]").
+Notation "'[' 'myCons' '-' 'tl' x ']'" := (projmyCons_tl _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'myCons' '-' 'tl' x ']'" := (projmyCons_tl _ x _) (only printing, format "[ myCons - tl  x ]").
+
 
 Check ok : ismyNil (@myNil nat).
 Check ok : ismyCons (myCons 5 myNil).
 Fail Check ok : ismyNil (myCons 5 myNil).
+
+Check oks : [myNil] (@myNil nat).
+Check eq_refl : [myCons-hd myCons 5 myNil] = 5.
+
+Check fun (v : myList bool) (h : [myCons] v) => [myCons-tl v].
 
 
 (* Definition myCons_hd {A : Type} (l : myList A) : ismyCons l -> A := *)
@@ -396,7 +417,14 @@ Arguments pair {_ _} _ _.
 
 (* MetaCoq Run (gen_discriminators false "mySig"%bs). *)
 MetaCoq Run (gen_projectors false "mySig"%bs).
+
 Arguments ispair {_} {_} _ : simpl nomatch.
+Notation "'[' 'pair' ']'" := (toSProp ispair) (format "[ pair ]").
+
+Notation "'[' 'pair' '-' 'dfst' x ']'" := (projpair_dfst _ _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'pair' '-' 'dfst' x ']'" := (projpair_dfst _ _ x _) (only printing, format "[ pair - dfst  x ]").
+Notation "'[' 'pair' '-' 'dsnd' x ']'" := (projpair_dsnd _ _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'pair' '-' 'dsnd' x ']'" := (projpair_dsnd _ _ x _) (only printing, format "[ pair - dsnd  x ]").
 
 (* Definition qdfst := Eval cbv in projpair_dfst. *)
 (* MetaCoq Run (tmMkDefinition "pdfst"%bs qdfst). *)
@@ -408,7 +436,6 @@ Arguments ispair {_} {_} _ : simpl nomatch.
 (* Check <% pfst %>. *)
 Check ok : ispair (pair 5 (6 : (fun _ => nat) _)).
 
-Notation "'[' 'pair' ']' " := ispair.
 
 (* Definition pair_dfst (A : Type) (B : A -> Type) (x : mySig A B) *)
 (*   : [pair] x -> A := *)
@@ -443,6 +470,9 @@ Inductive myBoolFam : bool -> Type :=
 (* MetaCoq Run (gen_discriminators false "myBoolFam"%bs). *)
 MetaCoq Run (gen_projectors false "myBoolFam"%bs).
 
+Arguments ismyIsTrue {_} _ : simpl nomatch.
+Notation "'[' 'myIsTrue' ']'" := (toSProp ismyIsTrue) (format "[ myIsTrue ]").
+
 Inductive vect (A : Type) : nat -> Type :=
 | vnil : vect A 0
 | vcons (hd : A) {len_tl} (tl : vect A len_tl) : vect A (S len_tl).
@@ -465,7 +495,17 @@ MetaCoq Run (gen_projectors false "vect"%bs).
 (*   end. *)
 
 Arguments isvnil {_} {_} _ : simpl nomatch.
+Notation "'[' 'vnil' ']'" := (toSProp isvnil) (format "[ vnil ]").
+
 Arguments isvcons {_} {_} _ : simpl nomatch.
+Notation "'[' 'vcons' ']'" := (toSProp isvcons) (format "[ vcons ]").
+
+Notation "'[' 'vcons' '-' 'hd' x ']'" := (projvcons_hd _ _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'vcons' '-' 'hd' x ']'" := (projvcons_hd _ _ x _) (only printing, format "[ vcons - hd  x ]").
+Notation "'[' 'vcons' '-' 'len_tl' x ']'" := (projvcons_len_tl _ _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'vcons' '-' 'len_tl' x ']'" := (projvcons_len_tl _ _ x _) (only printing, format "[ vcons - len_tl  x ]").
+Notation "'[' 'vcons' '-' 'tl' x ']'" := (projvcons_tl _ _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'vcons' '-' 'tl' x ']'" := (projvcons_tl _ _ x _) (only printing, format "[ vcons - tl  x ]").
 
 Check ok : isvnil (@vnil nat).
 Check ok : isvcons (vcons true vnil).
@@ -487,358 +527,3 @@ Arguments isoddS {_} _ : simpl nomatch.
 End DiscriminatorExamples.
 
 
-Definition gen_discr_class :=
-  let generate (debug:bool) ind mindbody oind_index oindbody ctor_idx ctor_id :=
-    discr_name <- tmEval all (discr_id ctor_id) ;;
-    discr_kn <- get_const discr_name;;
-    let discr_class_mid := build_discr_class ind mindbody ctor_id discr_kn in
-    let mindentry := mind_body_to_entry discr_class_mid in
-    if debug then
-      t <- tmEval all discr_class_mid ;;
-      tmPrint t ;;
-      t <- tmEval all mindentry ;;
-      tmPrint t
-    else
-      tmMkInductive mindentry ;;
-      (* class_id <- tmEval all (discr_class_id ctor_id) ;; *)
-      (* tmExistingInstance class_id;; *)
-      tmMsg ("Existing Class " ++ discr_class_id ctor_id ++ ".")
-  in gen_from_mind generate.
-
-
-
-(** Generation of the type of elimination for the discr class *)
-Definition gen_discr_class_Etype :=
-  let generate (debug:bool) ind mindbody oind_index oindbody ctor_idx ctor_id :=
-    discrclass_name <- tmEval all (discr_class_id ctor_id) ;;
-    discrclass_ind <- get_inductive discrclass_name;;
-    let discr_class_Etype :=
-      build_discr_class_Etype ind mindbody oindbody ctor_idx (* ctor_id *) (inductive_mind discrclass_ind)
-    in
-    if debug then t <- tmEval all discr_class_Etype ;; tmPrint t
-    else
-      tmMkDefinition (discr_class_Etype_id ctor_id) discr_class_Etype ;;
-      tmMsg (arguments_string (discr_class_Etype_id ctor_id)
-                              (ind_npars mindbody))
-  in
-  gen_from_mind generate.
-
-
-Definition gen_discr_class_E :=
-  let generate (debug:bool) ind mindbody oind_index oindbody ctor_idx ctor_id :=
-    discrclass_name <- tmEval all (discr_class_id ctor_id) ;;
-    discrclass_ind <- get_inductive discrclass_name;;
-    discrclass_Ety_name <- tmEval all (discr_class_Etype_id ctor_id) ;;
-    discrclass_Ety_kn <- get_const discrclass_Ety_name;;
-    let discr_class_E :=
-      build_discr_class_E ind mindbody oindbody ctor_idx (* ctor_id *) (inductive_mind discrclass_ind) discrclass_Ety_kn
-    in
-    if debug then t <- tmEval all discr_class_E ;; tmPrint t
-    else
-      (* tmMkDefinition (discr_class_E_id ctor_id) discr_class_E ;; *)
-      tmMsg (arguments_string (discr_class_E_id ctor_id) (ind_npars mindbody))
-  in
-  gen_from_mind generate.
-
-
-(** Tests *)
-From Coq Require Import ssreflect.
-Module TestGenDiscriminators.
-
-  Inductive myBool := myTrue | myFalse.
-  Run TemplateProgram (gen_discriminators false "myBool").
-  Arguments ismyTrue _ : simpl nomatch.
-  Arguments ismyFalse _ : simpl nomatch.
-
-  Run TemplateProgram (gen_discr_class false "myBool").
-  Existing Class is_myTrue.
-  Existing Class is_myFalse.
-
-  (** Bool *)
-  Run TemplateProgram (gen_discriminators false "bool").
-  (* Arguments istrue _ : simpl nomatch. *)
-  (* Arguments isfalse _ : simpl nomatch. *)
-  (* Class is_true0 (b:bool) := mkIs_true0 { istrue_pf0 : istrue b }. *)
-  (* Run TemplateProgram (t <- tmQuoteInductive "is_true0";; tmPrint t). *)
-  Run TemplateProgram (gen_discr_class true "bool").
-  Existing Class is_true.
-  Existing Class is_false.
-  Run TemplateProgram (gen_discr_class_Etype false "bool").
-  Arguments is_true_Etype _ : simpl nomatch.
-  Arguments is_false_Etype _ : simpl nomatch.
-
-
-  Run TemplateProgram (t <- tmAbout "is_true_Etype";; tmPrint t).
-  Run TemplateProgram (s <- tmEval all (discr_class_Etype_id "true") ;; t <- get_const s;; tmPrint t).
-  Run TemplateProgram (gen_discr_class_E true "bool").
-
-  Record T := { t : nat }.
-  Quote Definition Tproj := (fun (x:T) => t x).
-  Run TemplateProgram (t <- tmUnquote Tproj ;; tmPrint t).
-
-  Record T1 (b:bool) := mkT1 { t1 : Datatypes.is_true (istrue b) }.
-  Existing Class T1.
-  Quote Definition T1proj := (fun (x:T1 false) => notF (t1 _ x)).
-
-  Run TemplateProgram (t <- tmUnquote T1proj ;; tmPrint t).
-
-  Check mkIs_true true eq_refl.
-  (* Set Printing All. *)
-  (* Set Printing Universes. *)
-  Quote Definition is_false_E_b2_0 := (* (isfalse_pf true). *)
-    (fun pf_inst (* : is_false true *) =>  @isfalse_pf true pf_inst).
-  Run TemplateProgram (t <- tmUnquote is_false_E_b2_0 ;; tmPrint t).
-
-
-  Quote Definition is_true_E_b2_0 :=
-    (fun (pf_inst : is_true false) => notF (istrue_pf _ pf_inst)).
-
-  Run TemplateProgram (t <- tmUnquote is_true_E_b2_0 ;; tmPrint t).
-
-  Definition is_true_E_b2 :=
-    (tLambda (nNamed "pf_inst")
-            (tApp
-               (tInd
-                  {|
-                  inductive_mind := "Top.TestGenDiscriminators.is_true";
-                  inductive_ind := 0 |} [::])
-               [:: tConstruct
-                     {|
-                     inductive_mind := "Coq.Init.Datatypes.bool";
-                     inductive_ind := 0 |} 1 [::]])
-            (tApp (tConst "Coq.ssr.ssrbool.notF" [::])
-               [:: tProj
-                     ({|
-                      inductive_mind := "Top.TestGenDiscriminators.is_true";
-                      inductive_ind := 0 |}, 1, 0)
-                     (tRel 0)])).
-
-  (* Record is_true (principal : bool) : Prop := mkIs_true *)
-  (*   { istrue_pf : Datatypes.is_true (istrue principal) }. *)
-
-  Run TemplateProgram (t <- tmUnquote is_true_E_b2 ;; tmPrint t).
-  Run TemplateProgram (t <- tmUnquote is_true_E ;; tmPrint t).
-
-(* (tLambda (nNamed "principal") *)
-(*    (tInd {| inductive_mind := "bool"; inductive_ind := 0 |} [::]) *)
-(*    (tCase ({| inductive_mind := "bool"; inductive_ind := 0 |}, 0) *)
-(*       (tRel 0) (tConst "Top.TestGenDiscriminators.is_false_Etype" [::]) *)
-(*       [:: (0, *)
-(*           tLambda (nNamed "pf_inst") *)
-(*             (tApp *)
-(*                (tInd *)
-(*                   {| *)
-(*                   inductive_mind := "Top.TestGenDiscriminators.is_false"; *)
-(*                   inductive_ind := 0 |} [::]) *)
-(*                [:: tConstruct *)
-(*                      {| inductive_mind := "bool"; inductive_ind := 0 |} 0 *)
-(*                      [::]]) *)
-(*             (tApp (tConst "Coq.ssr.ssrbool.notF" [::]) *)
-(*                [:: tProj *)
-(*                      ({| *)
-(*                       inductive_mind := "Top.TestGenDiscriminators.is_false"; *)
-(*                       inductive_ind := 0 |}, 1, 0) *)
-(*                      (tRel 0)])); *)
-(*           (0, *)
-(*           tLambda (nNamed "pf_inst") *)
-(*             (tApp *)
-(*                (tInd *)
-(*                   {| *)
-(*                   inductive_mind := "Top.TestGenDiscriminators.is_false"; *)
-(*                   inductive_ind := 0 |} [::]) *)
-(*                [:: tConstruct *)
-(*                      {| inductive_mind := "bool"; inductive_ind := 0 |} 1 *)
-(*                      [::]]) *)
-(*             (tApp (tConst "Coq.Init.Logic.f_equal" [::]) *)
-(*                [:: tApp *)
-(*                      (tInd *)
-(*                         {| *)
-(*                         inductive_mind := "Coq.Init.Logic.eq"; *)
-(*                         inductive_ind := 0 |} [::]) *)
-(*                      [:: tInd *)
-(*                            {| *)
-(*                            inductive_mind := "Coq.Init.Datatypes.bool"; *)
-(*                            inductive_ind := 0 |} [::]; *)
-(*                          tConstruct *)
-(*                            {| *)
-(*                            inductive_mind := "Coq.Init.Datatypes.bool"; *)
-(*                            inductive_ind := 0 |} 0 [::]; *)
-(*                          tConstruct *)
-(*                            {| *)
-(*                            inductive_mind := "Coq.Init.Datatypes.bool"; *)
-(*                            inductive_ind := 0 |} 0 [::]]; *)
-(*                    tApp *)
-(*                      (tInd *)
-(*                         {| *)
-(*                         inductive_mind := "Top.TestGenDiscriminators.is_false"; *)
-(*                         inductive_ind := 0 |} [::]) *)
-(*                      [:: tConstruct *)
-(*                            {| inductive_mind := "bool"; inductive_ind := 0 |} *)
-(*                            1 [::]]; *)
-(*                    tApp *)
-(*                      (tConstruct *)
-(*                         {| *)
-(*                         inductive_mind := "Top.TestGenDiscriminators.is_false"; *)
-(*                         inductive_ind := 0 |} 0 [::]) *)
-(*                      [:: tConstruct *)
-(*                            {| inductive_mind := "bool"; inductive_ind := 0 |} *)
-(*                            1 [::]; *)
-(*                          tApp *)
-(*                            (tConstruct *)
-(*                               {| *)
-(*                               inductive_mind := "Coq.Init.Logic.eq"; *)
-(*                               inductive_ind := 0 |} 0 [::]) *)
-(*                            [:: tInd *)
-(*                                  {| *)
-(*                                  inductive_mind := "Coq.Init.Datatypes.bool"; *)
-(*                                  inductive_ind := 0 |} [::]; *)
-(*                                tConstruct *)
-(*                                  {| *)
-(*                                  inductive_mind := "Coq.Init.Datatypes.bool"; *)
-(*                                  inductive_ind := 0 |} 0 [::]]]; *)
-(*                    tProj *)
-(*                      ({| *)
-(*                       inductive_mind := "Top.TestGenDiscriminators.is_false"; *)
-(*                       inductive_ind := 0 |}, 1, 0) *)
-(*                      (tRel 0); *)
-(*                    tApp *)
-(*                      (tConstruct *)
-(*                         {| *)
-(*                         inductive_mind := "Coq.Init.Logic.eq"; *)
-(*                         inductive_ind := 0 |} 0 [::]) *)
-(*                      [:: tInd *)
-(*                            {| *)
-(*                            inductive_mind := "Coq.Init.Datatypes.bool"; *)
-(*                            inductive_ind := 0 |} [::]; *)
-(*                          tConstruct *)
-(*                            {| *)
-(*                            inductive_mind := "Coq.Init.Datatypes.bool"; *)
-(*                            inductive_ind := 0 |} 0 [::]]; *)
-(*                    tApp (tConst "Coq.Logic.Eqdep_dec.UIP_refl_bool" [::]) *)
-(*                      [:: tConstruct *)
-(*                            {| *)
-(*                            inductive_mind := "Coq.Init.Datatypes.bool"; *)
-(*                            inductive_ind := 0 |} 0 [::]; *)
-(*                          tProj *)
-(*                            ({| *)
-(*                             inductive_mind := "Top.TestGenDiscriminators.is_false"; *)
-(*                             inductive_ind := 0 |}, 1, 0) *)
-(*                            (tRel 0)]]))])) *)
-
-
-
-
-
-
-
-
-
-
-
-
-  Run TemplateProgram (gen_discriminators false "option").
-  Class is_none0 {A:Type} (m:option A) := mkIs_None0 { isNone_pf0 : isNone A m }.
-  Run TemplateProgram (t <- tmQuoteInductive "is_none0";; tmPrint t).
-  Class is_Some0 {A:Type} (m:option A) := mkIs_Some0 { isSome_pf0 : isSome A m }.
-  Run TemplateProgram (t <- tmQuoteInductive "is_Some0";; tmPrint t).
-  Run TemplateProgram (gen_discr_class false "option").
-  Existing Class is_Some.
-  (* FIXME : print the two following lines in gen_discr_class*)
-  Arguments is_Some {_} _.
-  Arguments isSome_pf {_} {_} {_}.
-  Existing Class is_None.
-  Run TemplateProgram (gen_discr_class_Etype false "option").
-  Arguments is_Some_Etype {_} _ : simpl nomatch.
-  Arguments is_None_Etype {_} _ : simpl nomatch.
-
-
-  Quote Definition is_SomeEty0 := (fun (A:Type) m =>
-    forall H : @is_Some A m, (match m with None => fun _ => False | Some v => fun H => H = mkIs_Some A (Some v) eq_refl end) H).
-
-  (* From Genxs Require Import etaRecord. *)
-  (* Run TemplateProgram (gen_eta_instance "is_Some0"). *)
-
-
-  (* Definition is_Some_pf := fun A (m : option A) (H : is_Some A m) => match H with mkIs_Some pf => pf end. *)
-
-  (* Definition eta_is_Some A (a:A) (H: is_Some A (Some a)) : H = mkIs_Some A (Some a) (is_Some_pf A (Some a) H) := *)
-  (*   match H as h return h = mkIs_Some _ _ (is_Some_pf _ _ h) with mkIs_Some pf => eq_refl end. *)
-
-  (* Definition is_someE' := (fun {A} {m:option A} => *)
-  (*   match m as m0 return is_Some_Etype A m0 with *)
-  (*   | Some y => fun H0 : is_Some A (Some y) => eq_trans (eta_is_Some _ _ H0) (f_equal (mkIs_Some _ (Some y)) (Eqdep_dec.UIP_refl_bool _ _)) *)
-  (*                (* match H0 as H return H = mkIs_Some _ (Some y) eq_refl with *) *)
-  (*                (* | mkIs_Some pf => f_equal (mkIs_Some _ (Some y)) (Eqdep_dec.UIP_refl_bool _ _) *) *)
-  (*                (* end *) *)
-  (*   | None => fun H0 : is_Some _ None => notF (is_Some_pf _ _ H0) *)
-  (*   end : is_Some_Etype A m). *)
-
-  Definition is_someE0 := (fun A (m:option A) =>
-    match m as m0 return @is_Some_Etype A m0 with
-    | Some y => fun H0 : @is_Some A (Some y) =>
-                 let sy := Some y in
-                 let tr := true in
-                 let ispf := @isSome_pf A sy H0 in
-                 @f_equal (@eq bool tr tr)
-                          (@is_Some A sy)
-                          (@mkIs_Some A sy)
-                          ispf
-                          (@eq_refl bool tr)
-                          (@Eqdep_dec.UIP_refl_bool tr ispf)
-    | None => fun H0 : @is_Some A None => @notF (@isSome_pf A None H0)
-    end).
-
-  Definition build_gen
-
-
-  Definition is_someE0 := (fun A (m:option A) =>
-    match m as m0 return @is_Some_Etype A m0 with
-    | Some y => fun H0 : @is_Some A (Some y) =>
-                 @f_equal (@eq bool true true)
-                          (@is_Some A (Some y))
-                          (@mkIs_Some A (Some y))
-                          (@isSome_pf A (Some y) H0)
-                          (@eq_refl bool true)
-                          (@Eqdep_dec.UIP_refl_bool true (@isSome_pf A (Some y) H0))
-    | None => fun H0 : @is_Some A None => @notF (@isSome_pf A None H0)
-    end).
-
-  Run TemplateProgram (gen_discriminators false "prod").
-  Class is_pair0 (A B : Type) (p : A * B) := mkIs_pair0 { ispair_pf0 : ispair A B p }.
-
-  Run TemplateProgram (t <- tmQuoteInductive "is_pair0";; tmPrint t).
-  Run TemplateProgram (gen_discr_class false "prod").
-  Existing Class is_pair.
-  Run TemplateProgram (gen_discr_class_Etype false "option").
-
-
-
-  Inductive I (A:Type) := IX : I A | IY : nat -> I A | IZ : forall (x:nat), x+x = 2 -> I A.
-
-  Definition isIX0 {A} (z : I A) := match z with | IX => true | _ => false end.
-  Arguments isIX0 [_] _.
-  Quote Definition qisIX0 := Eval unfold isIX0 in isIX0.
-
-  Run TemplateProgram (gen_discriminators false "I").
-  Run TemplateProgram (gen_discr_class false "I").
-  Existing Class is_IX.
-  Existing Class is_IY.
-  Existing Class is_IZ.
-
-  From Coq Require Import ssreflect.
-
-  Definition isSome0 A (z : option A) := if z is Some _ then true else false.
-  Definition isNone0 A (z : option A) := if z is None then true else false.
-  Quote Definition qisSome0 := Eval unfold isSome0 in isSome0.
-
-  Run TemplateProgram (gen_discriminators false "option").
-
-  (* Run TemplateProgram (gen_discriminators "option"). *)
-
-  (* FIXME: gen_discriminators does not manage indices ! *)
-  Inductive J (n:nat) : nat -> Type  := X : J n 0 | Y : J n n | Z : forall k, J n k.
-  Definition isX0 {n k} (z :  J n k) := match z with | X => true | _ => false end.
-  Arguments isX0 [_ _] _.
-  Quote Definition qisX0 := Eval unfold isX0 in isX0.
-
-End TestGenDiscriminators.
