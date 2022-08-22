@@ -8,8 +8,8 @@ Set Primitive Projections.
 Import MCMonadNotation.
 
 Section IteriInd.
-  Universe u.
-  Context (h : inductive -> mutual_inductive_body -> nat -> one_inductive_body -> nat -> constructor_body -> TemplateMonad@{_ u} unit).
+  Definition inductiveIteratorT := inductive -> mutual_inductive_body -> one_inductive_body -> nat -> constructor_body -> TemplateMonad@{_ Set} unit.
+  Context (h : inductiveIteratorT).
 
   Set Printing Universes.
 
@@ -18,11 +18,11 @@ Section IteriInd.
            (mindbody : mutual_inductive_body)
            (oind_index : nat)
            (oindbody : one_inductive_body)
-  : TemplateMonad@{_ u} unit :=
-  monad_iteri (h ind mindbody oind_index oindbody) (ind_ctors oindbody).
+  : TemplateMonad@{_ Set} unit :=
+  monad_iteri (h {| inductive_mind := ind.(inductive_mind) ; inductive_ind := oind_index |} mindbody oindbody) (ind_ctors oindbody).
 
   Definition mutualindbody_iteri (mindname : qualid)
-  : TemplateMonad@{_ u} unit :=
+  : TemplateMonad@{_ Set} unit :=
     ind <- get_inductive mindname ;;
     mindbody <- tmQuoteInductive ind.(inductive_mind) ;;
     monad_iteri (A:= one_inductive_body) (oneindbody_iteri ind mindbody) (ind_bodies mindbody).
@@ -43,44 +43,41 @@ Section Naming.
   Local Open Scope bs.
 
   Definition discr_id := "is" ++ ctor_id.
-  Definition discr_class_id := "is_" ++ ctor_id.
-  Definition discr_class_proj_id := "is" ++ ctor_id ++ "_pf".
-  Definition discr_class_ctor_id := "mkIs_" ++ ctor_id.
-  Definition discr_class_Etype_id := discr_class_id ++ "_Etype".
-  Definition discr_class_E_id := discr_class_id ++ "_E".
 
   Definition proj_id (argname : aname) (arg_i : nat) :=
     "proj" ++ ctor_id ++ "_" ++ aname_ident argname (string_of_nat arg_i).
 End Naming.
 
-
-
-(** Generation of discrimators *)
-
-Definition qBool := <% bool %>.
-Definition qtrue := <% true %>.
-Definition qfalse := <% false %>.
-
-(* Definition lf := String (Ascii.ascii_of_nat 10) EmptyString. *)
-
-Definition qeq_refl := <% @eq_refl %>.
-Definition qFalse := <% False %>.
-Definition qeq := <% @eq %>.
-
-(* Examples *)
-Definition qisZ := <% fun n : nat => match n with | 0 => true | _ => false end %>.
-Definition qisSuc := <% fun n : nat => match n with | S _ => true | _ => false end %>.
-Definition qisCons := <% fun A (l : list A) => match l with | cons _ _ => true | _ => false end %>.
-
-Definition qisEqrefl := <% fun A x y (e : @eq A x y) =>
-                            match e with | eq_refl => true end %>.
-
-
+(* Helpers for binders *)
 Definition relNamed (s : string) : aname :=
   {| binder_name := nNamed s ; binder_relevance := Relevant |}.
 Definition irrelNamed (s : string) : aname :=
   {| binder_name := nNamed s ; binder_relevance := Irrelevant |}.
-Definition anonIrrel : aname := {| binder_name := nAnon ; binder_relevance := Irrelevant |}.
+Definition anonIrrel : aname :=
+  {| binder_name := nAnon ; binder_relevance := Irrelevant |}.
+
+
+(** Generation of discrimators *)
+
+(* A discriminator for constructor K(a1,..,an) of an inductive I is a boolean-valued function
+   on I that discriminates K from the other constructors of K.
+
+   A projector for the l-th argument of a constructor K(a1,..,an) is a function that takes
+   an element x of I and a proof that x is of the form K(...) and returns its l-th argument.
+   The proofs consist of an application of the corresponding discriminator, wrapped to land
+   in SProp to be able to use strict proof-irrelevance.
+ *)
+
+(* Quoted examples of discriminators for nat, list and eq *)
+Definition qisZ := <% fun n : nat => match n with | 0 => true | _ => false end %>.
+Definition qisSuc := <% fun n : nat => match n with | S _ => true | _ => false end %>.
+
+Definition qisCons := <% fun A (l : list A) => match l with | cons _ _ => true | _ => false end %>.
+
+Definition qisEqrefl := <% fun A x y (e : @eq A x y) => match e with | eq_refl => true end %>.
+
+
+(** SProp helpers used in projectors *)
 
 From Coq.Logic Require Import StrictProp.
 
@@ -98,19 +95,6 @@ Definition bexfalso {A} (e : false = true) : A :=
 
 Definition sexfalso {A} (e : sEmpty) : A := sEmpty_rect (fun _ => A) e.
 
-(* Inductive foo := Foo : nat -> bool -> foo. *)
-
-(* MetaCoq Run ( *)
-(*     ind <- get_inductive "foo"%bs ;; *)
-(*     mindbody <- tmQuoteInductive ind.(inductive_mind) ;; *)
-(*     tmPrint mindbody). *)
-(* Check <% @pair %>. *)
-
-
-(* MetaCoq Run (tyEvar <- @tmQuote Type _ ;; *)
-(*              tmMkDefinition "testA"%bs (tApp <% S %> [tApp <% @id %> [tyEvar; <% 0 %> ]%list ]%list)). *)
-
-(* MetaCoq Run (t <- @tmQuote nat _ ;; tmPrint t). *)
 
 
 Section Builders.
@@ -154,15 +138,23 @@ Section Builders.
     it_mkLambda_or_LetIn ctx (tLambda principal (ind 0) body).
 
 
+  (* Generation of the argument string for discriminators
+     (all implicit but the main argument) *)
   Definition arguments_string id :=
     let args :=
       List.fold_left (fun (s:string) _ => ("{_} " ++ s)%bs) ctx "_ : simpl nomatch."%bs
     in
     ("Arguments " ++ id ++ " " ++ args)%bs.
 
+  (* Generation of the notation for discriminators
+     for constructor K of inductive I,
+     [isK] : I -> bool *)
   Definition discriminator_notation id :=
     ("Notation ""'[' '" ++ id++ "' ']'"" := (toSProp " ++ discr_id id ++ ") (format ""[ " ++ id ++ " ]"").")%bs.
 
+  (* Generation of the notation for projector
+     for argument l of constructor K of inductive I,
+     x : I ⊢ [K-l x] : typeof(l) *)
   Definition projector_notation id arg projector_id :=
     let common :=
     ("Notation ""'[' '" ++ id++ "' '-' '" ++ arg ++ "' x ']'"" := (" ++ projector_id ++
@@ -171,6 +163,7 @@ Section Builders.
     ((common ++ " x ltac:(assumption + easy)) (only parsing).")%bs,
       (common ++ " x _) (only printing, format ""[ " ++ id ++ " - " ++ arg ++ "  " ++ "x ]"").")%bs).
 
+  (** Building projectors *)
   (* For constructor c_k :
     param_ctx ,,, indices_ctx ,, principal |- bodies
 
@@ -190,8 +183,6 @@ Section Builders.
    exfalso_branch := sexfalso (arg_i_type [bodies_>i] (* weakening *))
 
    *)
-
-
   Definition build_projectors (discriminator : term) (mp : modpath)
     : list (ident * term) :=
     let principal := relNamed "principal"%bs in
@@ -250,7 +241,7 @@ Section Builders.
 
         {| bcontext := List.map decl_name cb.(cstr_args) ;
            bbody := if Nat.eqb ctor_k ctor_index
-                    then correct_branch 
+                    then correct_branch
                     else exfalso_branch |}
       in
 
@@ -275,33 +266,22 @@ Section Builders.
 End Builders.
 
 
-Definition gen_from_mind  generate (debug:bool) (mindname : qualid)
-  : TemplateMonad unit :=
-  ind <- get_inductive mindname ;;
-  mindbody <- tmQuoteInductive ind.(inductive_mind) ;;
-  let oid_gen _ oindbody :=
-    ind <- get_inductive oindbody.(ind_name) ;;
-    let ctor_gen := generate debug ind mindbody oindbody in
-    monad_iteri ctor_gen (ind_ctors oindbody)
-  in
-  monad_iteri oid_gen (ind_bodies mindbody).
-
-Definition gen_discriminators :=
-  let generate (debug:bool) ind mindbody oindbody ctor_idx ctor :=
-    let discr_id := discr_id ctor.(cstr_name) in
-    let discr_body := build_discriminators ind mindbody oindbody ctor_idx in
-    t <- tmEval all discr_body ;;
-    if debug then tmPrint t
-    else
-      tmMkDefinition discr_id t ;;
-      tmMsg (arguments_string mindbody oindbody discr_id) ;;
-      tmMsg (discriminator_notation ctor.(cstr_name))
-  in
-  gen_from_mind generate.
-
+(* For debugging purpose *)
 Definition mkQuoteDefinition (id : ident) (tm : term) :
   TemplateMonad unit :=
   tmDefinitionRed id (Some all) (A:=term) tm ;; ret tt.
+
+Definition generate_discriminator : inductiveIteratorT :=
+  fun ind mindbody oindbody ctor_idx ctor =>
+    let discr_id := discr_id ctor.(cstr_name) in
+    let discr_body := build_discriminators ind mindbody oindbody ctor_idx in
+    t <- tmEval all discr_body ;;
+    (* mkQuoteDefinition ("q" ++ discr_id)%bs t ;; *)
+    tmMkDefinition discr_id t ;;
+    tmMsg (arguments_string mindbody oindbody discr_id) ;;
+    tmMsg (discriminator_notation ctor.(cstr_name)).
+
+Definition gen_discriminators := mutualindbody_iteri generate_discriminator.
 
 
 Definition constructor_arg_name (ctor : constructor_body) (i : nat) : option string :=
@@ -310,8 +290,8 @@ Definition constructor_arg_name (ctor : constructor_body) (i : nat) : option str
   | None => None
   end.
 
-Definition gen_projectors :=
-  let generate (debug:bool) ind mindbody oindbody ctor_idx ctor :=
+Definition generate_projector : inductiveIteratorT :=
+  fun ind mindbody oindbody ctor_idx ctor =>
     let discr_id := discr_id ctor.(cstr_name) in
     let discr_body := build_discriminators ind mindbody oindbody ctor_idx in
     tmMkDefinition discr_id discr_body ;;
@@ -321,8 +301,10 @@ Definition gen_projectors :=
     mp <- tmCurrentModPath tt ;;
     let discr_kn := (mp, discr_id) in
     let projs := build_projectors ind mindbody oindbody ctor_idx ctor (tConst discr_kn nil%list) mp in
-      (* monad_iter (fun '(id, body) => mkQuoteDefinition ("q" ++ id)%bs body) (List.rev projs) *)
+    (* for debugging purpose *)
+    (* monad_iter (fun '(id, body) => mkQuoteDefinition ("q" ++ id)%bs body) (List.rev projs) *)
     monad_iter (uncurry tmMkDefinition) projs ;;
+
     let mk_notation arg_i '(id, _) :=
       match constructor_arg_name ctor arg_i with
       | Some name =>
@@ -331,10 +313,12 @@ Definition gen_projectors :=
       | None => ret tt
       end
     in
-    monad_iteri mk_notation  projs
-  in
-  gen_from_mind generate.
+    monad_iteri mk_notation  projs.
 
+Definition gen_projectors := mutualindbody_iteri generate_projector.
+
+
+(** Examples of discriminators and projectors *)
 
 Module DiscriminatorExamples.
 
@@ -343,8 +327,11 @@ Notation oks := stt.
 
 Inductive myBool := myTrue | myFalse.
 
+(* For discriminators only: *)
 (* MetaCoq Run (gen_discriminators false "myBool"%bs). *)
-MetaCoq Run (gen_projectors false "myBool"%bs).
+MetaCoq Run (gen_projectors "myBool"%bs).
+
+(*Copy pasted from the output of the command *)
 Arguments ismyTrue _ : simpl nomatch.
 Notation "'[' 'myTrue' ']'" := (toSProp ismyTrue) (format "[ myTrue ]").
 Arguments ismyFalse _ : simpl nomatch.
@@ -357,18 +344,8 @@ Inductive myList (A : Type) := myNil | myCons (hd : A) (tl : myList A) : myList 
 Arguments myNil {_}.
 Arguments myCons {_} _ _.
 
-(* MetaCoq Run (gen_discriminators false "myList"%bs). *)
-MetaCoq Run (gen_projectors false "myList"%bs).
+MetaCoq Run (gen_projectors "myList"%bs).
 
-(* Definition qhd := Eval cbv in projmyCons_hd. *)
-(* MetaCoq Run (tmMkDefinition "phd"%bs qhd). *)
-
-(* Definition qtl := Eval cbv in projmyCons_tl. *)
-(* MetaCoq Run (tmMkDefinition "ptl"%bs qtl). *)
-
-(* MetaCoq Run (list <- get_inductive "myList"%bs ;; *)
-(*              ind <- tmQuoteInductive list.(inductive_mind) ;; *)
-(*              tmPrint ind). *)
 
 Arguments ismyNil {_} _ : simpl nomatch.
 Notation "'[' 'myNil' ']'" := (toSProp ismyNil) (format "[ myNil ]").
@@ -391,32 +368,13 @@ Check eq_refl : [myCons-hd myCons 5 myNil] = 5.
 Check fun (v : myList bool) (h : [myCons] v) => [myCons-tl v].
 
 
-(* Definition myCons_hd {A : Type} (l : myList A) : ismyCons l -> A := *)
-(*   match l with *)
-(*   | myNil => bexfalso *)
-(*   | myCons hd _ => fun _ => hd *)
-(*   end. *)
-
-(* Definition myCons_hd_s {A : Type} (l : myList A) : [myCons] l -> A := *)
-(*   match l with *)
-(*   | myNil => sexfalso *)
-(*   | myCons hd _ => fun _ => hd *)
-(*   end. *)
-
-(* Notation "'[' 'myCons' '-' 'hd' l ']'" := *)
-(*   (myCons_hd_s l ltac:(assumption)) (only parsing). *)
-(* Notation "'[' 'myCons' '-' 'hd' l ']'" := *)
-(*   (myCons_hd_s l _) (only printing). *)
-
-(* Check fun (l : myList nat) (h : [myCons] l) => Nat.eqb [myCons-hd l] 5. *)
-
 
 Inductive mySig (A : Type) (B : A -> Type) :=
   | pair (dfst : A) (dsnd : B dfst) : mySig A B.
 Arguments pair {_ _} _ _.
 
 (* MetaCoq Run (gen_discriminators false "mySig"%bs). *)
-MetaCoq Run (gen_projectors false "mySig"%bs).
+MetaCoq Run (gen_projectors "mySig"%bs).
 
 Arguments ispair {_} {_} _ : simpl nomatch.
 Notation "'[' 'pair' ']'" := (toSProp ispair) (format "[ pair ]").
@@ -426,49 +384,15 @@ Notation "'[' 'pair' '-' 'dfst' x ']'" := (projpair_dfst _ _ x _) (only printing
 Notation "'[' 'pair' '-' 'dsnd' x ']'" := (projpair_dsnd _ _ x ltac:(assumption + easy)) (only parsing).
 Notation "'[' 'pair' '-' 'dsnd' x ']'" := (projpair_dsnd _ _ x _) (only printing, format "[ pair - dsnd  x ]").
 
-(* Definition qdfst := Eval cbv in projpair_dfst. *)
-(* MetaCoq Run (tmMkDefinition "pdfst"%bs qdfst). *)
-
-(* Definition qdsnd := Eval cbn in projpair_dsnd. *)
-
-(* MetaCoq Run (tmMkDefinition "pdsnd'"%bs qdsnd'). *)
-(* MetaCoq Run (mp <- tmCurrentModPath tt ;; tmPrint mp). *)
-(* Check <% pfst %>. *)
 Check ok : ispair (pair 5 (6 : (fun _ => nat) _)).
 
-
-(* Definition pair_dfst (A : Type) (B : A -> Type) (x : mySig A B) *)
-(*   : [pair] x -> A := *)
-(*   match x with *)
-(*   | pair dfst dsnd => fun _ => dfst *)
-(*   end. *)
-
-(* Arguments pair_dfst {_} {_} _ _. *)
-(* Notation "'[' 'pair' '-' 'dfst' x ']'" := *)
-(*   (pair_dfst x ltac:(assumption)) (only parsing). *)
-(* Notation "'[' 'pair' '-' 'dfst' x ']'" := *)
-(*   (pair_dfst x _) (only printing). *)
-
-(* Definition pair_dsnd (A : Type) (B : A -> Type) (x : mySig A B) *)
-(*   : forall (h : [pair] x), B [pair-dfst x] := *)
-(*   match x with *)
-(*   | pair dfst dsnd => fun _ => dsnd *)
-(*   end. *)
-
-(* Arguments pair_dsnd {_} {_} _ _. *)
-(* Notation "'[' 'pair' '-' 'dsnd' x ']'" := *)
-(*   (pair_dsnd x ltac:(assumption + easy)) (only parsing). *)
-(* Notation "'[' 'pair' '-' 'dsnd' x ']'" := *)
-(*   (pair_dsnd x _) (only printing). *)
-
-(* Eval cbn in let p : mySig nat (fun _ => nat) := pair 5 6 in *)
-(*             [pair-dsnd p]. *)
 
 
 Inductive myBoolFam : bool -> Type :=
   | myIsTrue : myBoolFam true.
+
 (* MetaCoq Run (gen_discriminators false "myBoolFam"%bs). *)
-MetaCoq Run (gen_projectors false "myBoolFam"%bs).
+MetaCoq Run (gen_projectors "myBoolFam"%bs).
 
 Arguments ismyIsTrue {_} _ : simpl nomatch.
 Notation "'[' 'myIsTrue' ']'" := (toSProp ismyIsTrue) (format "[ myIsTrue ]").
@@ -479,20 +403,8 @@ Inductive vect (A : Type) : nat -> Type :=
 Arguments vnil {_}.
 Arguments vcons {_} _ {_} _.
 (* MetaCoq Run (gen_discriminators false "vect"%bs). *)
-MetaCoq Run (gen_projectors false "vect"%bs).
+MetaCoq Run (gen_projectors "vect"%bs).
 
-(* MetaCoq Run (tmMkDefinition "projvcons_hd"%bs qprojvcons_hd). *)
-(* MetaCoq Run (tmMkDefinition "projvcons_len_tl"%bs qprojvcons_len_tl). *)
-
-(* Definition qprojvcons_tl0 := Eval cbv in qprojvcons_tl. *)
-(* MetaCoq Run (tmMkDefinition "projvcons_tl"%bs qprojvcons_tl0). *)
-
-(* Definition pvcons_tl A n (v : vect A n) : *)
-(*   forall (h : is_true_s (isvcons A n v)), vect A (projvcons_len_tl A n v h) := *)
-(*   match v with *)
-(*   | vnil => fun e : sEmpty => sexfalso e *)
-(*   | vcons _ _ tl => fun _ => tl *)
-(*   end. *)
 
 Arguments isvnil {_} {_} _ : simpl nomatch.
 Notation "'[' 'vnil' ']'" := (toSProp isvnil) (format "[ vnil ]").
@@ -518,11 +430,53 @@ Inductive even : nat -> Type :=
 with odd : nat -> Type :=
 | oddS {n} (evenn : even n) : odd (S n).
 
-(* MetaCoq Run (gen_discriminators false "even"%bs). *)
-MetaCoq Run (gen_projectors false "even"%bs).
+(* MetaCoq Run (gen_discriminators "even"%bs). *)
+MetaCoq Run (gen_projectors "even"%bs).
+
+Arguments ismyTrue _ : simpl nomatch.
+Notation "'[' 'myTrue' ']'" := (toSProp ismyTrue) (format "[ myTrue ]").
+Arguments ismyFalse _ : simpl nomatch.
+Notation "'[' 'myFalse' ']'" := (toSProp ismyFalse) (format "[ myFalse ]").
+Arguments ismyNil {_} _ : simpl nomatch.
+Notation "'[' 'myNil' ']'" := (toSProp ismyNil) (format "[ myNil ]").
+Arguments ismyCons {_} _ : simpl nomatch.
+Notation "'[' 'myCons' ']'" := (toSProp ismyCons) (format "[ myCons ]").
+Notation "'[' 'myCons' '-' 'hd' x ']'" := (projmyCons_hd _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'myCons' '-' 'hd' x ']'" := (projmyCons_hd _ x _) (only printing, format "[ myCons - hd  x ]").
+Notation "'[' 'myCons' '-' 'tl' x ']'" := (projmyCons_tl _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'myCons' '-' 'tl' x ']'" := (projmyCons_tl _ x _) (only printing, format "[ myCons - tl  x ]").
+Arguments ispair {_} {_} _ : simpl nomatch.
+Notation "'[' 'pair' ']'" := (toSProp ispair) (format "[ pair ]").
+Notation "'[' 'pair' '-' 'dfst' x ']'" := (projpair_dfst _ _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'pair' '-' 'dfst' x ']'" := (projpair_dfst _ _ x _) (only printing, format "[ pair - dfst  x ]").
+Notation "'[' 'pair' '-' 'dsnd' x ']'" := (projpair_dsnd _ _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'pair' '-' 'dsnd' x ']'" := (projpair_dsnd _ _ x _) (only printing, format "[ pair - dsnd  x ]").
+Arguments ismyIsTrue {_} _ : simpl nomatch.
+Notation "'[' 'myIsTrue' ']'" := (toSProp ismyIsTrue) (format "[ myIsTrue ]").
+Arguments isvnil {_} {_} _ : simpl nomatch.
+Notation "'[' 'vnil' ']'" := (toSProp isvnil) (format "[ vnil ]").
+Arguments isvcons {_} {_} _ : simpl nomatch.
+Notation "'[' 'vcons' ']'" := (toSProp isvcons) (format "[ vcons ]").
+Notation "'[' 'vcons' '-' 'hd' x ']'" := (projvcons_hd _ _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'vcons' '-' 'hd' x ']'" := (projvcons_hd _ _ x _) (only printing, format "[ vcons - hd  x ]").
+Notation "'[' 'vcons' '-' 'len_tl' x ']'" := (projvcons_len_tl _ _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'vcons' '-' 'len_tl' x ']'" := (projvcons_len_tl _ _ x _) (only printing, format "[ vcons - len_tl  x ]").
+Notation "'[' 'vcons' '-' 'tl' x ']'" := (projvcons_tl _ _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'vcons' '-' 'tl' x ']'" := (projvcons_tl _ _ x _) (only printing, format "[ vcons - tl  x ]").
 Arguments isevenZ {_} _ : simpl nomatch.
+Notation "'[' 'evenZ' ']'" := (toSProp isevenZ) (format "[ evenZ ]").
 Arguments isevenS {_} _ : simpl nomatch.
+Notation "'[' 'evenS' ']'" := (toSProp isevenS) (format "[ evenS ]").
+Notation "'[' 'evenS' '-' 'n' x ']'" := (projevenS_n _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'evenS' '-' 'n' x ']'" := (projevenS_n _ x _) (only printing, format "[ evenS - n  x ]").
+Notation "'[' 'evenS' '-' 'oddn' x ']'" := (projevenS_oddn _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'evenS' '-' 'oddn' x ']'" := (projevenS_oddn _ x _) (only printing, format "[ evenS - oddn  x ]").
 Arguments isoddS {_} _ : simpl nomatch.
+Notation "'[' 'oddS' ']'" := (toSProp isoddS) (format "[ oddS ]").
+Notation "'[' 'oddS' '-' 'n' x ']'" := (projoddS_n _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'oddS' '-' 'n' x ']'" := (projoddS_n _ x _) (only printing, format "[ oddS - n  x ]").
+Notation "'[' 'oddS' '-' 'evenn' x ']'" := (projoddS_evenn _ x ltac:(assumption + easy)) (only parsing).
+Notation "'[' 'oddS' '-' 'evenn' x ']'" := (projoddS_evenn _ x _) (only printing, format "[ oddS - evenn  x ]").
 
 End DiscriminatorExamples.
 
