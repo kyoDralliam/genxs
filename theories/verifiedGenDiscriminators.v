@@ -326,6 +326,12 @@ Section Builders.
         apply: (weakening0 _ (qfalseWty _ _))=> //.
     Qed.
 
+    (* TODO: show a spec for the discriminators, e.g.
+       if dk is the k-th discriminator of an inductive I then
+       Σ ; Γ ⊢ dk (ck ...) ≡ true : 𝔹
+       Σ ; Γ ⊢ dk (cj ...) ≡ false : 𝔹 for j ≠ k
+     *)
+
   End WtyDiscriminator.
 
 
