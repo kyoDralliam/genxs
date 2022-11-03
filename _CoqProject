@@ -1,7 +1,9 @@
 -Q theories Genxs
 
+theories/toMetacoq.v
 theories/metacoq_utils.v
 theories/genDiscriminators.v
 theories/etaRecord.v
 theories/unbundling.v
-theories/quoteRecord.v
+theories/verifiedGenDiscriminators.v
+# theories/quoteRecord.v
